@@ -1,0 +1,226 @@
+---
+title: "Skeleton-based action recognition in MMAction2"
+description: "Recognize actions from human pose keypoints using MMAction2's ST-GCN, PoseC3D, and STGCN++ models on NTU-RGB+D, FineGYM, and other skeleton datasets."
+---
+
+Skeleton-based action recognition uses 2D or 3D human pose keypoints as the input representation rather than raw RGB video. Keypoints are compact, occlusion-robust, and free from scene and appearance biases, making them useful both standalone and as a complementary modality fused with RGB features. MMAction2 supports two main families of skeleton-based models: graph-based methods that model the skeleton as a graph and apply graph convolutions over joints and temporal edges, and volumetric methods that encode keypoint heatmaps into 3D pseudo-images processed by standard 3D CNNs.
+
+## Approaches
+
+<Tabs>
+  <Tab title="Graph-based (GCN)">
+    Graph-based methods represent the skeleton as a spatial-temporal graph where nodes are body joints and edges encode both joint connectivity (spatial) and frame-to-frame temporal links. Graph convolutional networks (GCN) propagate information along these edges to learn discriminative action representations.
+
+    **Models in this family:** ST-GCN, 2s-AGCN, STGCN++, CTRGCN, MSG3D
+  </Tab>
+  <Tab title="Volumetric (CNN)">
+    Volumetric methods convert skeleton sequences into 3D heatmap stacks — one volume per body part or joint channel — and process them with standard 3D CNNs. This approach avoids the need for a hand-crafted graph topology and is more robust to pose estimation noise.
+
+    **Models in this family:** PoseC3D
+  </Tab>
+</Tabs>
+
+## Supported datasets
+
+| Dataset | Subjects | Classes | Joints | Keypoint dim | Split |
+|---|---|---|---|---|---|
+| NTU RGB+D 60 | 40 | 60 | 25 | 3D | X-Sub, X-View |
+| NTU RGB+D 120 | 106 | 120 | 25 | 3D | X-Sub, X-Set |
+| FineGYM | — | 99 (sub-actions) | 17 | 2D | — |
+| UCF101 (pose) | — | 101 | 17 | 2D | Split 1 |
+| HMDB51 (pose) | — | 51 | 17 | 2D | Split 1 |
+| Kinetics-400 (pose) | — | 400 | 17 | 2D | — |
+
+<Info>
+The pose-based splits of UCF101, HMDB51, FineGYM, and Kinetics-400 are produced by running 2D pose estimation (e.g., with MMPose) on the original RGB videos and storing the keypoint sequences in the PoseC3D skeleton annotation format.
+</Info>
+
+## Supported models
+
+### ST-GCN — Spatial Temporal Graph Convolutional Networks (AAAI 2018)
+
+ST-GCN was the first work to apply graph convolutions directly to the human skeleton for action recognition. The spatial graph is defined by physical joint connectivity (e.g., shoulder to elbow), and graph convolution is extended to the temporal dimension by connecting each joint to its counterpart in neighboring frames. Multiple graph convolutional layers with learnable edge weights extract hierarchical spatio-temporal features.
+
+**NTU60 X-Sub 2D results:**
+
+| Modality | top-1 acc | FLOPs | Params |
+|---|---|---|---|
+| Joint | 88.95 | 3.8G | 3.1M |
+| Bone | 91.69 | 3.8G | 3.1M |
+| Joint-motion | 86.90 | 3.8G | 3.1M |
+| Bone-motion | 87.86 | 3.8G | 3.1M |
+| Two-stream fusion | 92.12 | — | — |
+| Four-stream fusion | 92.34 | — | — |
+
+**NTU60 X-Sub 3D results:**
+
+| Modality | top-1 acc |
+|---|---|
+| Joint | 88.11 |
+| Bone | 88.76 |
+| Two-stream fusion | 90.14 |
+| Four-stream fusion | 90.39 |
+
+---
+
+### 2s-AGCN — Two-Stream Adaptive Graph Convolutional Network (CVPR 2019)
+
+2s-AGCN introduces adaptive graph convolution by learning a data-dependent adjacency matrix on top of the physical skeleton graph, allowing the model to capture non-physical dependencies (e.g., hand-foot correlation during kicking). A second stream processes bone vectors (joint differences) and the two streams are fused at the score level.
+
+**Supported datasets:** NTU RGB+D 60, NTU RGB+D 120
+
+---
+
+### PoseC3D (CVPR 2022)
+
+PoseC3D replaces the graph representation with a 3D heatmap volume where each channel corresponds to one body joint's spatial heatmap stacked over time. A SlowOnly 3D CNN then processes this volume, treating the problem identically to RGB video action recognition. This design makes PoseC3D more robust to pose estimation noise, handles multi-person scenarios without extra cost, and enables early-stage fusion with RGB features.
+
+**FineGYM results (SlowOnly-R50, uniform 48 frames):**
+
+| Pseudo heatmap | Mean Top-1 | FLOPs | Params |
+|---|---|---|---|
+| Keypoint | 93.5 | 20.6G | 2.0M |
+| Limb | 93.6 | 20.6G | 2.0M |
+
+**NTU60 X-Sub results (SlowOnly-R50, uniform 48 frames):**
+
+| Pseudo heatmap | top-1 acc |
+|---|---|
+| Keypoint | 93.6 |
+| Limb | 93.5 |
+| Fusion | 94.0 |
+
+**UCF101 results (Kinetics-400 pretrained SlowOnly-R50):**
+
+| Pseudo heatmap | top-1 acc |
+|---|---|
+| Keypoint | 86.8 |
+
+**HMDB51 results (Kinetics-400 pretrained SlowOnly-R50):**
+
+| Pseudo heatmap | top-1 acc |
+|---|---|
+| Keypoint | 69.6 |
+
+---
+
+### STGCN++ (ArXiv 2022)
+
+STGCN++ is introduced in the PYSKL toolkit and serves as an improved GCN baseline. It achieves competitive accuracy on NTU benchmarks without complex attention mechanisms by carefully revisiting data preprocessing, training recipes, and architectural choices. It uses the same four-stream (joint, bone, joint-motion, bone-motion) evaluation strategy as ST-GCN.
+
+**NTU60 X-Sub 2D results:**
+
+| Modality | top-1 acc | FLOPs | Params |
+|---|---|---|---|
+| Joint | 89.29 | 1.95G | 1.39M |
+| Bone | 92.30 | 1.95G | 1.39M |
+| Joint-motion | 87.30 | 1.95G | 1.39M |
+| Bone-motion | 88.76 | 1.95G | 1.39M |
+| Two-stream fusion | 92.61 | — | — |
+| Four-stream fusion | 92.77 | — | — |
+
+**NTU60 X-Sub 3D results:**
+
+| Modality | top-1 acc |
+|---|---|
+| Joint | 89.14 |
+| Bone | 90.21 |
+| Two-stream fusion | 91.39 |
+| Four-stream fusion | 91.87 |
+
+---
+
+### CTRGCN — Channel-wise Topology Refinement Graph Convolution (CVPR 2021)
+
+CTRGCN models topology graphs that are channel-specific rather than shared across all feature channels, allowing different joints to play different roles depending on the feature being computed. Available as a community contribution in `projects/ctrgcn/`.
+
+**Supported datasets:** NTU RGB+D 60, NTU RGB+D 120
+
+---
+
+### MSG3D — Multi-Scale Aggregation with Disentangled Semantics (CVPR 2020)
+
+MSG3D extends graph convolution with a multi-scale topology and disentangles short-range and long-range spatial-temporal dependencies, achieving strong performance on NTU benchmarks. Available as a community contribution in `projects/msg3d/`.
+
+**Supported datasets:** NTU RGB+D 60, NTU RGB+D 120
+
+## Skeleton data preparation
+
+Skeleton annotations in MMAction2 are stored as `.pkl` files where each entry contains the video's keypoint sequence and metadata. You can either download pre-extracted annotations or generate them from RGB videos.
+
+### Downloading pre-extracted annotations
+
+Pre-extracted skeleton annotations for PoseC3D training are available from the PoseC3D homepage. Follow the preparation guide at `tools/data/skeleton/README.md` to place them in the correct directory layout.
+
+### Extracting poses from RGB videos with MMPose
+
+To generate skeleton annotations from your own videos:
+
+```bash
+# Install MMPose
+mim install mmpose
+
+# Run pose estimation on a dataset
+python tools/data/skeleton/ntu_pose_extraction.py \
+  --video-dir data/nturgbd/videos/ \
+  --out-file data/nturgbd/ntu60_2d.pkl \
+  --det-config configs/detection/... \
+  --pose-config configs/body/...
+```
+
+<Tip>
+For multi-person scenarios, run a person detector first and supply the detection results to the pose estimator. PoseC3D handles multiple skeletons without additional computation cost by simply stacking their heatmaps.
+</Tip>
+
+## Multi-stream fusion
+
+GCN-based models benefit from ensembling predictions from multiple input modalities. MMAction2 supports:
+
+- **Two-stream fusion:** joint + bone streams weighted 1:1
+- **Four-stream fusion:** joint, joint-motion, bone, bone-motion weighted 2:1:2:1
+
+Use `tools/analysis_tools/report_accuracy.py` with the `--multi-stream-fusion` flag to combine score files from separately evaluated streams.
+
+## Training
+
+Train a skeleton model with `tools/train.py`:
+
+```bash
+# Train ST-GCN on NTU60-2D
+python tools/train.py \
+  configs/skeleton/stgcn/stgcn_8xb16-joint-u100-80e_ntu60-xsub-keypoint-2d.py \
+  --seed 0 --deterministic
+
+# Train PoseC3D on FineGYM
+python tools/train.py \
+  configs/skeleton/posec3d/slowonly_r50_8xb16-u48-240e_gym-keypoint.py \
+  --seed 0 --deterministic
+```
+
+## Inference
+
+Use the `inference_skeleton` API for skeleton-based inference on a single video:
+
+```python
+from mmaction.apis import init_recognizer
+from mmaction.utils import get_str_type
+
+# Load a PoseC3D model
+config = 'configs/skeleton/posec3d/slowonly_r50_8xb16-u48-240e_gym-keypoint.py'
+checkpoint = 'checkpoints/posec3d_gym_keypoint.pth'
+model = init_recognizer(config, checkpoint, device='cuda:0')
+```
+
+For an end-to-end demo that runs pose estimation and skeleton action recognition on a video file, see `demo/skeleton_demo.py`:
+
+```bash
+python demo/skeleton_demo.py \
+  demo/demo.mp4 \
+  configs/skeleton/posec3d/slowonly_r50_8xb16-u48-240e_gym-keypoint.py \
+  checkpoints/posec3d_gym_keypoint.pth \
+  --label-map tools/data/gym/gym99_label_map.txt
+```
+
+## Custom dataset training
+
+PoseC3D supports training on custom datasets. See the custom dataset training guide at `configs/skeleton/posec3d/custom_dataset_training.md` for instructions on preparing annotations, defining label maps, and configuring the dataloader.

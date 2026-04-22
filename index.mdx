@@ -1,97 +1,91 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "MMAction2: Video Understanding Toolbox"
+description: "MMAction2 is an open-source PyTorch toolbox for video understanding. Build, train, and evaluate state-of-the-art action recognition and detection models."
 ---
 
-## Setting up
+MMAction2 is an open-source video understanding toolbox built on PyTorch and part of the [OpenMMLab](https://openmmlab.com) ecosystem. It provides a unified framework for training and evaluating state-of-the-art models across five core video understanding tasks: action recognition, temporal action localization, spatio-temporal action detection, skeleton-based action recognition, and video retrieval.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/get-started/installation">
+    Set up MMAction2 with PyTorch, MMCV, and MMEngine in your environment.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quick Start" icon="rocket" href="/get-started/quickstart">
+    Run your first inference and training job in minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Model Zoo" icon="database" href="/model-zoo/action-recognition">
+    Browse 20+ pre-trained models for recognition, detection, and localization.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="User Guides" icon="book" href="/user-guides/config">
+    Learn to configure datasets, training pipelines, and evaluation metrics.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can build
 
-Everything you need to create world-class documentation.
+MMAction2 supports a wide range of video understanding tasks out of the box.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Action Recognition" icon="play" href="/model-zoo/action-recognition">
+    Classify actions in untrimmed and trimmed videos using models like TSN, TSM, I3D, SlowFast, VideoMAE, and UniFormer.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Temporal Action Localization" icon="clock" href="/model-zoo/action-localization">
+    Detect when actions occur in long videos with BSN, BMN, and TCANet.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Spatio-Temporal Detection" icon="crosshairs" href="/model-zoo/spatiotemporal-detection">
+    Localize who is doing what and where in video using AVA and related benchmarks.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Skeleton-based Recognition" icon="person-running" href="/model-zoo/skeleton-action">
+    Recognize actions from pose keypoints using ST-GCN, PoseC3D, and STGCN++.
   </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Get started in 3 steps
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Install MMAction2">
+    Install the toolbox and its dependencies using conda and pip:
+    ```bash
+    conda create --name openmmlab python=3.8 -y
+    conda activate openmmlab
+    pip install -U openmim
+    mim install mmengine mmcv
+    pip install mmaction2
+    ```
+  </Step>
+  <Step title="Download a pre-trained model">
+    Use the OpenMIM package manager to fetch a checkpoint and its config:
+    ```bash
+    mim download mmaction2 --config tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb --dest .
+    ```
+  </Step>
+  <Step title="Run inference on a video">
+    Use the Python API to classify actions in any video file:
+    ```python
+    from mmaction.apis import init_recognizer, inference_recognizer
+
+    config = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py'
+    checkpoint = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth'
+
+    model = init_recognizer(config, checkpoint, device='cuda:0')
+    result = inference_recognizer(model, 'demo/demo.mp4')
+    print(result.pred_score.topk(5))
+    ```
+  </Step>
+</Steps>
+
+## Advanced capabilities
+
+<CardGroup cols={2}>
+  <Card title="Customize models" icon="sliders" href="/advanced-guides/customize-models">
+    Add new backbones, heads, and loss functions using MMAction2's modular registry.
+  </Card>
+  <Card title="Customize datasets" icon="table" href="/advanced-guides/customize-dataset">
+    Write dataset classes and annotation pipelines for your own video data.
+  </Card>
+  <Card title="Deploy models" icon="server" href="/advanced-guides/deploy">
+    Export trained models to ONNX and TensorRT for production inference.
+  </Card>
+  <Card title="Framework overview" icon="diagram-project" href="/advanced-guides/framework-overview">
+    Understand the dataflow, registry system, and component lifecycle.
+  </Card>
+</CardGroup>

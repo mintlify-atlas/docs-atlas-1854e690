@@ -1,0 +1,274 @@
+---
+title: "MMAction2 frequently asked questions"
+description: "Solutions to common MMAction2 issues including installation errors, CUDA compatibility, dataset preparation problems, and training configuration questions."
+---
+
+This page collects the most frequent issues reported by MMAction2 users and provides step-by-step solutions. If your issue is not covered here, open a [GitHub issue](https://github.com/open-mmlab/mmaction2/issues/new/choose) and fill in all required information in the provided template.
+
+## Installation
+
+<AccordionGroup>
+  <Accordion title='"No module named mmcv.ops" or "No module named mmcv._ext"'>
+    These errors mean that `mmcv` was installed without its compiled C++ and CUDA extensions. The pure-Python `mmcv` package on PyPI does not include `mmcv.ops`.
+
+    <Steps>
+      <Step title="Uninstall existing mmcv">
+        ```bash
+        pip uninstall mmcv
+        ```
+      </Step>
+      <Step title="Reinstall mmcv with extensions">
+        Follow the [official mmcv installation guide](https://mmcv.readthedocs.io/en/2.x/get_started/installation.html#install-mmcv) and install the version that matches your CUDA and PyTorch versions. Using `mim` is the simplest approach:
+
+        ```bash
+        pip install -U openmim
+        mim install mmcv
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title='"OSError: MoviePy Error: creation of None failed"'>
+    This error occurs when MoviePy cannot locate an ImageMagick binary.
+
+    **On Windows:** MoviePy does not auto-detect ImageMagick. Edit `moviepy/config_defaults.py` and set the path explicitly:
+
+    ```python
+    IMAGEMAGICK_BINARY = "C:\\Program Files\\ImageMagick_VERSION\\magick.exe"
+    ```
+
+    **On Linux:** The default ImageMagick security policy may block MoviePy. Edit `/etc/ImageMagick-6/policy.xml` and comment out the restrictive path policy:
+
+    ```xml
+    <!-- <policy domain="path" rights="none" pattern="@*" /> -->
+    ```
+  </Accordion>
+
+  <Accordion title='"Please install XXCODEBASE to use XXX" even though it is installed'>
+    This message means Python can import the package name but fails when importing a specific function or class from it. Run the failing import line directly in a Python shell to see the underlying error:
+
+    ```python
+    from mmdet.models import ... # replace with the actual failing import
+    ```
+
+    The most common cause is installation order. Several OpenMMLab packages require `mmcv` and `mmengine` to be installed **before** themselves. Re-install in the correct order:
+
+    ```bash
+    pip install -U openmim
+    mim install mmengine
+    mim install mmcv
+    mim install mmdet   # optional, for detection
+    mim install mmpose  # optional, for skeleton-based tasks
+    pip install -v -e .
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Dataset preparation
+
+<AccordionGroup>
+  <Accordion title='FileNotFoundError: "No such file or directory: xxx/img_00300.jpg"'>
+    MMAction2 uses a different default `start_index` depending on the dataset type:
+
+    - **RawFrame datasets**: `start_index=1` (frames named `img_00001.jpg`, `img_00002.jpg`, …)
+    - **Video datasets**: `start_index=0`
+
+    If you hit a missing-file error on the first or last frame, check whether your extracted frames start at `_00000` or `_00001`, then update `start_index` in your data pipeline config to match:
+
+    ```python
+    train_pipeline = [
+        dict(type='SampleFrames', clip_len=8, frame_interval=2,
+             num_clips=1, start_index=0),  # adjust to 0 or 1
+        ...
+    ]
+    ```
+  </Accordion>
+
+  <Accordion title="Should I resize videos to a fixed size or by short edge?">
+    MMAction2 defaults to **short-edge resizing at 256 px** rather than a fixed width×height. In benchmarks on TSN and SlowOnly, resizing to a fixed aspect-ratio box (e.g. 340×256) performs worse than letting the short edge set the scale.
+
+    Use the default short-edge approach unless you have a specific reason to deviate. Benchmark results comparing both approaches are available in the [TSN configs](https://github.com/open-mmlab/mmaction2/tree/master/configs/recognition/tsn) and [SlowOnly configs](https://github.com/open-mmlab/mmaction2/tree/master/configs/recognition/slowonly).
+  </Accordion>
+
+  <Accordion title='KeyError: "total_frames" during training or validation'>
+    This error means your pipeline contains `RawFrameDecode` but your dataset is a video file, not pre-extracted frames. `total_frames` is only known before decoding for frame datasets.
+
+    **For video datasets**, use a paired init/decode step:
+
+    ```python
+    train_pipeline = [
+        dict(type='DecordInit'),
+        dict(type='SampleFrames', clip_len=8, frame_interval=2, num_clips=1),
+        dict(type='DecordDecode'),
+        ...
+    ]
+    ```
+
+    **For rawframe datasets**, use `RawFrameDecode` instead:
+
+    ```python
+    train_pipeline = [
+        dict(type='SampleFrames', clip_len=8, frame_interval=2, num_clips=1),
+        dict(type='RawFrameDecode'),
+        ...
+    ]
+    ```
+
+    <Warning>
+      Never mix `RawFrameDecode` into a pipeline that feeds video files. The two pipeline styles are not interchangeable.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="How do I switch from VideoDataset to RawframeDataset?">
+    MMAction2 1.x defaults to `VideoDataset` for easier file storage. To switch to `RawframeDataset`, make two changes in your config:
+
+    **1. Update the dataset type and prefix:**
+
+    ```python
+    # Before (video)
+    dataset = dict(
+        type='VideoDataset',
+        data_prefix=dict(video='path/to/videos'),
+        ...
+    )
+
+    # After (rawframes)
+    dataset = dict(
+        type='RawframeDataset',
+        data_prefix=dict(img='path/to/frames'),
+        filename_tmpl='{:05}.jpg',  # must match your frame filenames
+        ...
+    )
+    ```
+
+    **2. Update the transforms pipeline:**
+
+    ```python
+    file_client_args = dict(io_backend='disk')
+
+    train_pipeline = [
+        # Remove: dict(type='DecordInit', **file_client_args),
+        dict(type='SampleFrames', clip_len=8, frame_interval=2, num_clips=1),
+        # Change DecordDecode → RawFrameDecode:
+        dict(type='RawFrameDecode', **file_client_args),
+        ...
+    ]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Training
+
+<AccordionGroup>
+  <Accordion title="How do I use a pre-trained checkpoint for backbone initialization?">
+    MMAction2 provides two ways to load pre-trained weights:
+
+    **Load the full model** (all layers, via `load_from`):
+
+    ```python
+    # In your config file
+    load_from = 'https://download.openmmlab.com/path/to/checkpoint.pth'
+    ```
+
+    **Load only the backbone** (using `pretrained` in the backbone dict). Unexpected keys are silently ignored:
+
+    ```python
+    model = dict(
+        type='Recognizer2D',
+        backbone=dict(
+            type='ResNet',
+            depth=50,
+            pretrained='path/or/url/to/imagenet_checkpoint.pth',
+        ),
+        ...
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="How do I freeze backbone stages during fine-tuning?">
+    All backbones that inherit from `ResNet` or `ResNet3D` support `frozen_stages`. Set it in the backbone config:
+
+    ```python
+    backbone=dict(
+        type='ResNet3D',
+        depth=50,
+        frozen_stages=1,  # freeze stem + stage 1
+    )
+    ```
+
+    When using distributed training or testing with frozen parameters, also set:
+
+    ```python
+    find_unused_parameters = True
+    ```
+
+    The freeze logic is implemented in `_freeze_stages()` inside each backbone class (e.g. `mmaction/models/backbones/resnet3d.py`).
+  </Accordion>
+
+  <Accordion title="How do I configure memcached for data loading?">
+    Pass memcached kwargs directly to `DecordInit` (for video datasets) or `RawFrameDecode` (for rawframe datasets):
+
+    ```python
+    mc_cfg = dict(
+        server_list_cfg='path/to/server_list_cfg',
+        client_cfg='path/to/client_cfg',
+        sys_path='path/to/sys_path',
+    )
+
+    train_pipeline = [
+        dict(type='SampleFrames', clip_len=8, frame_interval=2, num_clips=1),
+        dict(type='RawFrameDecode', io_backend='memcached', **mc_cfg),
+        ...
+    ]
+    ```
+
+    See the `FileClient` documentation in MMEngine for all available backends.
+  </Accordion>
+
+  <Accordion title="How do I set load_from to fine-tune from an existing checkpoint?">
+    MMAction2 sets `load_from = None` by default in `configs/_base_/default_runtime.py`. Override it in your own config:
+
+    ```python
+    # At the top level of your config file
+    load_from = 'path/to/pretrained_model.pth'
+    ```
+
+    Due to MMAction2's config inheritance system, this single line is sufficient — no need to modify `_base_` files.
+  </Accordion>
+</AccordionGroup>
+
+## Inference and testing
+
+<AccordionGroup>
+  <Accordion title="How do I get softmax-normalized scores between 0 and 1?">
+    By default, classification heads return raw logits. To normalize scores with softmax during testing, set `average_clips='prob'` in the head config:
+
+    ```python
+    model = dict(
+        ...
+        cls_head=dict(
+            type='TSNHead',
+            average_clips='prob',  # 'score' (default) or 'prob'
+            ...
+        ),
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="GPU runs out of memory during testing with 3D models">
+    3D models are tested with 10 clips × 3 crops = 30 views by default. For large models, even a single sample with 30 views may not fit in GPU memory. Limit how many views are forwarded at once with `max_testing_views`:
+
+    ```python
+    model = dict(
+        ...
+        test_cfg=dict(max_testing_views=6),  # reduce until it fits
+    )
+    ```
+
+    This batches the 30 views into smaller groups during forward passes, reducing peak memory at the cost of slightly longer inference time.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  If none of the solutions above resolve your issue, file a detailed bug report using the [GitHub issue template](https://github.com/open-mmlab/mmaction2/tree/main/.github/ISSUE_TEMPLATE/error-report.md). Include your environment info, the full error traceback, and the config file you are using.
+</Note>

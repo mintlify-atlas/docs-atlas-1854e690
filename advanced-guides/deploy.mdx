@@ -1,0 +1,194 @@
+---
+title: "Deploy MMAction2 models with MMDeploy"
+description: "Export trained MMAction2 recognition models to ONNX and TensorRT using MMDeploy for high-performance production inference on CPU and GPU."
+---
+
+MMAction2 integrates with [MMDeploy](https://github.com/open-mmlab/mmdeploy) to export trained recognition models to portable inference formats. MMDeploy handles the conversion from PyTorch checkpoints to ONNX or TensorRT engines, and provides a unified runtime API so your inference code does not change between backends.
+
+<Warning>
+MMDeploy is a separate package from MMAction2. You must install it before running any conversion commands. Installation requirements vary depending on whether you target ONNX Runtime, TensorRT, or another backend.
+</Warning>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install MMDeploy">
+    Install MMDeploy and the backend SDK you intend to use. The `mmdeploy` package provides the conversion tools; backend-specific SDK packages (e.g. `mmdeploy-runtime-gpu`) provide the inference runtime.
+
+    ```bash
+    # Install MMDeploy with ONNX Runtime support
+    pip install mmdeploy
+    pip install mmdeploy-runtime
+
+    # Install MMDeploy with TensorRT support (requires CUDA + TensorRT installed)
+    pip install mmdeploy
+    pip install mmdeploy-runtime-gpu
+    ```
+
+    For full installation instructions including TensorRT, NCNN, and OpenVINO backends, refer to the [MMDeploy installation guide](https://mmdeploy.readthedocs.io/en/latest/get_started.html).
+  </Step>
+  <Step title="Prepare a trained checkpoint">
+    You need a trained MMAction2 config file and its corresponding `.pth` checkpoint. Use `mim download` to fetch a pre-trained checkpoint, or point to your own:
+
+    ```bash
+    mim download mmaction2 \
+      --config tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb \
+      --dest ./checkpoints
+    ```
+  </Step>
+  <Step title="Clone the MMDeploy repository">
+    The conversion scripts live in the MMDeploy repository. Clone it to get `tools/deploy.py`:
+
+    ```bash
+    git clone https://github.com/open-mmlab/mmdeploy.git
+    cd mmdeploy
+    ```
+  </Step>
+</Steps>
+
+## Converting to ONNX
+
+MMDeploy's `tools/deploy.py` script handles the full conversion pipeline. You specify a deploy config (which selects the backend and optimization options), the MMAction2 model config, the checkpoint, and a sample input video.
+
+```bash
+python tools/deploy.py \
+  configs/mmaction/video-recognition/video-recognition_onnxruntime_static.py \
+  /path/to/mmaction2/configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+  checkpoints/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth \
+  /path/to/mmaction2/demo/demo.mp4 \
+  --work-dir ./mmdeploy_output/tsn_onnx \
+  --device cpu \
+  --dump-info
+```
+
+After conversion, `./mmdeploy_output/tsn_onnx/` will contain:
+- `end2end.onnx` — the exported ONNX model
+- `pipeline.json` — preprocessing configuration for the runtime
+- `deploy_cfg.py` — deployment configuration used during conversion
+
+<Tip>
+Use `--dump-info` to write the full deployment metadata alongside the model file. The MMDeploy Python SDK reads this directory and sets up preprocessing automatically.
+</Tip>
+
+## Converting to TensorRT
+
+Replace the deploy config with a TensorRT-specific one. TensorRT engines are device-specific and must be built on the target GPU.
+
+```bash
+python tools/deploy.py \
+  configs/mmaction/video-recognition/video-recognition_tensorrt_static-224x224.py \
+  /path/to/mmaction2/configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+  checkpoints/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth \
+  /path/to/mmaction2/demo/demo.mp4 \
+  --work-dir ./mmdeploy_output/tsn_tensorrt \
+  --device cuda:0 \
+  --dump-info
+```
+
+<Info>
+TensorRT engines are compiled for a specific GPU architecture. An engine built on an A100 will not run on a T4. Always build the engine on the same GPU you intend to use for inference.
+</Info>
+
+## Running inference with the deployed model
+
+After conversion, use the MMDeploy Python SDK to load the exported model and run inference. The API is the same regardless of whether you exported to ONNX or TensorRT.
+
+```python
+from mmdeploy.apis import inference_model
+from mmdeploy.utils import get_input_shape, load_config
+
+deploy_cfg, model_cfg = load_config(
+    'configs/mmaction/video-recognition/video-recognition_onnxruntime_static.py',
+    '/path/to/mmaction2/configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py',
+)
+
+result = inference_model(
+    model_cfg,
+    deploy_cfg,
+    backend_files=['./mmdeploy_output/tsn_onnx/end2end.onnx'],
+    img='/path/to/mmaction2/demo/demo.mp4',
+    device='cpu',
+)
+print(result)
+```
+
+For production use, initialize the model once and call it repeatedly:
+
+```python
+from mmdeploy.apis.utils import build_task_processor
+from mmdeploy.utils import load_config, get_input_shape
+import torch
+
+deploy_cfg_path = 'configs/mmaction/video-recognition/video-recognition_onnxruntime_static.py'
+model_cfg_path = '/path/to/tsn_config.py'
+backend_model = ['./mmdeploy_output/tsn_onnx/end2end.onnx']
+device = 'cpu'
+
+deploy_cfg, model_cfg = load_config(deploy_cfg_path, model_cfg_path)
+task_processor = build_task_processor(model_cfg, deploy_cfg, device)
+
+# Pre-process input video
+model_input, _ = task_processor.create_input(
+    '/path/to/video.mp4',
+    input_shape=get_input_shape(deploy_cfg),
+)
+
+# Run inference
+with torch.no_grad():
+    result = task_processor.run_inference(task_processor.init_backend_model(backend_model), model_input)
+
+print(result)
+```
+
+## Supported model–backend combinations
+
+Not every MMAction2 model is compatible with every backend. The following table summarizes common combinations:
+
+| Model | ONNX Runtime | TensorRT | Notes |
+|---|---|---|---|
+| TSN | ✓ | ✓ | 2D backbone; fast to export |
+| TSM | ✓ | ✓ | Temporal shift is exportable |
+| I3D | ✓ | ✓ | Standard 3D conv |
+| SlowFast | ✓ | ✓ | Dual-pathway; larger model |
+| X3D | ✓ | ✓ | Efficient 3D convolutions |
+| VideoMAE | Partial | Partial | Attention ops may require opset 17+ |
+| UniFormer | Partial | Partial | Check MMDeploy release notes for your version |
+
+<Note>
+Support for specific model–backend combinations is updated with each MMDeploy release. Check the [MMDeploy model support list](https://mmdeploy.readthedocs.io/en/latest/supported_models/models.html) for the authoritative status table.
+</Note>
+
+## Performance considerations
+
+<CardGroup cols={2}>
+  <Card title="FP16 precision" icon="bolt">
+    TensorRT supports FP16 mode, which roughly doubles throughput on NVIDIA GPUs with Tensor Cores. Enable it in the deploy config by setting `fp16_mode=True` in `backend_config.common_config`.
+  </Card>
+  <Card title="INT8 quantization" icon="compress">
+    TensorRT INT8 mode can further improve throughput with minimal accuracy loss. It requires a calibration dataset to compute activation statistics. Configure via `backend_config.calib_config` in the deploy config.
+  </Card>
+  <Card title="Static vs dynamic shapes" icon="ruler">
+    TensorRT engines built with static input shapes are fastest. If your inference batch size or input resolution varies, use dynamic shape configs (`tensorrt_dynamic`) and set explicit min/opt/max profile shapes.
+  </Card>
+  <Card title="Multi-clip testing" icon="film">
+    MMAction2 models commonly sample multiple temporal clips per video during testing. Batch all clips together in a single engine call rather than running them sequentially to maximize GPU utilization.
+  </Card>
+</CardGroup>
+
+## Verifying the exported model
+
+Before deploying to production, verify that the exported model produces outputs consistent with the original PyTorch model on a reference video:
+
+```bash
+python tools/check_env.py
+
+# Run the MMDeploy model checker to compare PyTorch vs backend outputs
+python tools/test.py \
+  configs/mmaction/video-recognition/video-recognition_onnxruntime_static.py \
+  /path/to/mmaction2/configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+  --model ./mmdeploy_output/tsn_onnx/end2end.onnx \
+  --metrics top_k_accuracy \
+  --device cpu
+```
+
+A top-1 accuracy difference of less than 0.5% between the PyTorch and exported model is generally acceptable for production use.

@@ -1,0 +1,289 @@
+---
+title: "Prepare datasets for MMAction2 training"
+description: "How to download, organize, and preprocess video datasets including Kinetics, UCF101, HMDB51, and AVA for training MMAction2 models on your data."
+---
+
+MMAction2 supports two underlying data formats—raw frames and video files—and provides dataset classes for action recognition, skeleton-based recognition, audio-based recognition, spatio-temporal detection, and temporal localization. Before training, you need to arrange your data on disk in the format each dataset class expects, then point the config at the right annotation files.
+
+## Data format overview
+
+MMAction2 supports two storage layouts for video data:
+
+<CardGroup cols={2}>
+  <Card title="Raw frames" icon="images">
+    Pre-extracted JPEG/PNG frames stored in per-video directories. Fast I/O on SSD, but requires significantly more disk space. Used by `RawframeDataset`.
+  </Card>
+  <Card title="Video files" icon="video">
+    Original MP4/AVI files decoded at runtime using decord or PyAV. Saves disk space at the cost of CPU decode overhead. Used by `VideoDataset`.
+  </Card>
+</CardGroup>
+
+<Tip>
+For large datasets like Kinetics-700 (650 K+ videos), video-file format is strongly recommended to avoid the disk space required for raw frames.
+</Tip>
+
+## Built-in dataset preparation scripts
+
+MMAction2 ships shell scripts for every supported dataset under `tools/data/`. Run the script for the dataset you need:
+
+```bash
+# Example: prepare Kinetics-400
+bash tools/data/kinetics/preparing_kinetics.sh
+
+# Example: prepare UCF-101
+bash tools/data/ucf101/prepare_data.sh
+
+# Example: prepare HMDB-51
+bash tools/data/hmdb51/prepare_data.sh
+```
+
+Refer to the [dataset zoo](https://mmaction2.readthedocs.io/en/latest/datasetzoo_statistics.html) for the full list of supported datasets and their individual preparation guides.
+
+## Custom dataset: action recognition
+
+To use your own dataset for action recognition, convert it to one of two annotation formats and set `dataset_type` to the matching class in your config.
+
+### Raw-frame annotation (`RawframeDataset`)
+
+Each line of the annotation text file contains three space-separated fields:
+
+```
+<frame_directory> <total_frames> <label>
+```
+
+Example:
+
+```
+some/directory-1 163 1
+some/directory-2 122 1
+some/directory-3 258 2
+some/directory-4 234 2
+some/directory-5 295 3
+some/directory-6 121 3
+```
+
+- `frame_directory` — path relative to `data_prefix.img`
+- `total_frames` — total number of frames extracted for that video
+- `label` — integer class index
+
+### Video-file annotation (`VideoDataset`)
+
+Each line contains two space-separated fields:
+
+```
+<relative_video_path> <label>
+```
+
+Example:
+
+```
+some/path/000.mp4 1
+some/path/001.mp4 1
+some/path/002.mp4 2
+some/path/003.mp4 2
+some/path/004.mp4 3
+some/path/005.mp4 3
+```
+
+### Config snippet for a custom dataset
+
+```python
+# configs/task/method/my_custom_config.py
+
+dataset_type = 'RawframeDataset'
+data_root     = 'path/to/your/root'
+data_root_val = 'path/to/your/root_val'
+ann_file_train = 'data/custom/custom_train_list.txt'
+ann_file_val   = 'data/custom/custom_val_list.txt'
+ann_file_test  = 'data/custom/custom_val_list.txt'
+
+train_dataloader = dict(
+    dataset=dict(
+        type=dataset_type,
+        ann_file=ann_file_train,
+        data_prefix=dict(img=data_root),
+        pipeline=train_pipeline))
+val_dataloader = dict(
+    dataset=dict(
+        type=dataset_type,
+        ann_file=ann_file_val,
+        data_prefix=dict(img=data_root_val),
+        pipeline=val_pipeline,
+        test_mode=True))
+test_dataloader = dict(
+    dataset=dict(
+        type=dataset_type,
+        ann_file=ann_file_test,
+        data_prefix=dict(img=data_root_val),
+        pipeline=test_pipeline,
+        test_mode=True))
+```
+
+## Custom dataset: skeleton-based action recognition
+
+Skeleton datasets use `PoseDataset`. You can build them from RGB video data or from existing keypoint data.
+
+### Building from RGB video
+
+Extract keypoints from raw video first, then convert to the pickle format. A step-by-step guide is available in the [PoseC3D custom dataset tutorial](https://github.com/open-mmlab/mmaction2/blob/main/configs/skeleton/posec3d/custom_dataset_training.md).
+
+### Building from existing keypoint data
+
+Gather per-video COCO-format keypoints into a single pickle file. The file must be a dictionary with two top-level keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `split` | dict | Maps split names (e.g. `"xsub_train"`) to lists of `frame_dir` identifiers |
+| `annotations` | list | One dict per video (see fields below) |
+
+Each annotation dict must contain:
+
+| Field | Type | Description |
+|---|---|---|
+| `frame_dir` | str | Video identifier matching `split` entries |
+| `total_frames` | int | Number of frames |
+| `img_shape` | tuple[int] | `(height, width)` — required for 2D skeletons |
+| `original_shape` | tuple[int] | Same as `img_shape` |
+| `label` | int | Action class index |
+| `keypoint` | ndarray `[M, T, V, C]` | Keypoint coordinates |
+| `keypoint_score` | ndarray `[M, T, V]` | Confidence scores — required for 2D skeletons |
+
+`M` = persons, `T` = frames, `V` = keypoints (17 for COCO, 18 for OpenPose, 25 for NTU RGB+D), `C` = coordinate dimensions (2 for 2D, 3 for 3D).
+
+Example structure:
+
+```python
+{
+    "split": {
+        "xsub_train": ["S001C001P001R001A001", ...],
+        "xsub_val":   ["S001C001P003R001A001", ...]
+    },
+    "annotations": [
+        {
+            "frame_dir":       "S001C001P001R001A001",
+            "label":           0,
+            "img_shape":       (1080, 1920),
+            "original_shape":  (1080, 1920),
+            "total_frames":    103,
+            "keypoint":        array([[[[1032., 334.8], ...]]])  # [M,T,V,C]
+            "keypoint_score":  array([[[0.934, 0.977, ...]]])   # [M,T,V]
+        },
+        ...
+    ]
+}
+```
+
+## Custom dataset: audio-based action recognition
+
+`AudioDataset` expects mel-spectrogram `.npy` feature files. Each annotation line has three fields:
+
+```
+<feature_filename.npy> <total_video_frames> <label>
+```
+
+Example:
+
+```
+ihWykL5mYRI.npy 300 153
+lumzQD42AN8.npy 240 321
+sWFRmD9Of4s.npy 250 250
+```
+
+<Steps>
+  <Step title="Extract audio from videos">
+    ```bash
+    python tools/data/extract_audio.py \
+        ${ROOT} ${DST_ROOT} \
+        [--ext ${EXT}] \
+        [--num-workers ${N_WORKERS}] \
+        [--level ${LEVEL}]
+    ```
+
+    - `ROOT` — root directory of the source videos
+    - `DST_ROOT` — destination directory for extracted audio files
+    - `EXT` — video file extension, e.g. `mp4`
+    - `N_WORKERS` — number of parallel workers
+  </Step>
+  <Step title="Generate mel-spectrogram features">
+    ```bash
+    python tools/data/build_audio_features.py \
+        ${AUDIO_HOME_PATH} ${SPECTROGRAM_SAVE_PATH} \
+        [--level ${LEVEL}] \
+        [--ext ${EXT}] \
+        [--num-workers ${N_WORKERS}] \
+        [--part ${PART}]
+    ```
+
+    - `AUDIO_HOME_PATH` — root directory of audio files
+    - `SPECTROGRAM_SAVE_PATH` — output directory for `.npy` feature files
+    - `EXT` — audio extension, e.g. `m4a`
+    - `PART` — split work across machines, e.g. `2/5` runs the 2nd of 5 parts
+  </Step>
+</Steps>
+
+## Custom dataset: spatio-temporal action detection (AVA)
+
+`AVADataset` requires two annotation files per split: ground-truth bounding boxes and person-detector proposals.
+
+### Ground-truth bounding boxes (CSV)
+
+Each row is one detection instance for one frame:
+
+```
+video_identifier,time_stamp,lt_x,lt_y,rb_x,rb_y,label,entity_id
+```
+
+All coordinates are normalized to `[0, 1]`. Example:
+
+```
+_-Z6wFjXtGQ,0902,0.063,0.049,0.524,0.996,12,0
+_-Z6wFjXtGQ,0902,0.063,0.049,0.524,0.996,74,0
+```
+
+### Proposal bounding boxes (pickle)
+
+A dict mapping `"video_identifier,time_stamp"` to an `ndarray` of shape `[n, 5]`:
+
+```python
+{'video_id,timestamp': array([[x1, y1, x2, y2, score], ...])}
+```
+
+All coordinates are normalized. The proposals are typically produced by a person detector fine-tuned on the target dataset.
+
+## Custom dataset: temporal action localization (ActivityNet)
+
+`ActivityNetDataset` expects a JSON annotation file. Each key is a video name and the value contains duration metadata and a list of annotated segments:
+
+```json
+{
+  "video1": {
+    "duration_second": 211.53,
+    "duration_frame": 6337,
+    "feature_frame": 6336,
+    "fps": 30.0,
+    "rfps": 29.958,
+    "annotations": [
+      {
+        "segment": [30.03, 205.23],
+        "label": "Rock climbing"
+      }
+    ]
+  },
+  "video2": { "...": "..." }
+}
+```
+
+## Mixing datasets for training
+
+Use `RepeatDataset` as a wrapper to oversample a smaller dataset relative to others in a multi-dataset training setup:
+
+```python
+train_dataloader = dict(
+    dataset=dict(
+        type='RepeatDataset',
+        times=3,                # repeat Dataset_A three times per epoch
+        dataset=dict(
+            type='Dataset_A',
+            ann_file=ann_file_train,
+            pipeline=train_pipeline)))
+```

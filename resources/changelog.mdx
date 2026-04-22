@@ -1,0 +1,169 @@
+---
+title: "MMAction2 release history and changelog"
+description: "Version history for MMAction2 including new models, features, bug fixes, and breaking changes from v1.0 through the latest v1.2.0 release."
+---
+
+MMAction2 follows a structured release cycle. The 1.x series, built on [MMEngine](https://github.com/open-mmlab/mmengine), is the actively maintained branch. The legacy 0.x series (the `master` branch) is in maintenance mode. New users should start with 1.x.
+
+<Note>
+  The default branch was switched from `master` (0.x) to `main` (1.x). If you are migrating an existing project, see the [migration guide](https://mmaction2.readthedocs.io/en/latest/migration.html).
+</Note>
+
+## v1.2.0 — October 12, 2023
+
+This release adds multi-modality model training, lightweight backbone support, a new video retrieval dataset, and improved demo tooling.
+
+**Highlights**
+
+- ActionCLIP training support (training was inference-only in v1.1.0)
+- VindLU multi-modality video-language algorithm
+- MobileOne backbone for TSN and TSM (lightweight models)
+
+### New features
+
+- **ActionCLIP training** — Full training support for the ActionCLIP model ([#2620](https://github.com/open-mmlab/mmaction2/pull/2620))
+- **VindLU** — Multi-modality video-language algorithm ([#2667](https://github.com/open-mmlab/mmaction2/pull/2667))
+- **MSVD dataset** — Video retrieval dataset support ([#2622](https://github.com/open-mmlab/mmaction2/pull/2622))
+- **Dense Regression Network** — Video grounding with DRN ([#2668](https://github.com/open-mmlab/mmaction2/pull/2668))
+
+### Improvements
+
+- MobileOne TSN/TSM backbones for efficient inference ([#2656](https://github.com/open-mmlab/mmaction2/pull/2656))
+- SlowOnly K700 features for training temporal localization models ([#2673](https://github.com/open-mmlab/mmaction2/pull/2673))
+- Video demo support ([#2602](https://github.com/open-mmlab/mmaction2/pull/2602))
+- Audio demo support ([#2603](https://github.com/open-mmlab/mmaction2/pull/2603))
+
+### Bug fixes
+
+- Refine `ActionDataSample` structure ([#2658](https://github.com/open-mmlab/mmaction2/pull/2658))
+- Fix MPS device compatibility ([#2619](https://github.com/open-mmlab/mmaction2/pull/2619))
+
+---
+
+## v1.1.0 — July 3, 2023
+
+A major feature release focused on new datasets, CLIP-based multi-modality models, and knowledge distillation.
+
+**Highlights**
+
+- Three new datasets: HACS-segments (ICCV 2019), MultiSports (ICCV 2021), and Kinetics-710
+- Gesture recognition and spatio-temporal detection projects
+- VideoMAE V2 (CVPR 2023) and VideoMAE on action detection
+- ActionCLIP and CLIP4Clip multi-modality models
+- Pure Python-style configuration file support
+
+### New features
+
+- HACS-segments dataset ([#2224](https://github.com/open-mmlab/mmaction2/pull/2224))
+- TCANet temporal action proposal network (CVPR 2021) ([#2271](https://github.com/open-mmlab/mmaction2/pull/2271))
+- MultiSports dataset ([#2280](https://github.com/open-mmlab/mmaction2/pull/2280))
+- Knowledge distillation via MMRazor integration ([#2458](https://github.com/open-mmlab/mmaction2/pull/2458))
+- VideoMAE V2 ([#2460](https://github.com/open-mmlab/mmaction2/pull/2460))
+- ActionCLIP CLIP-based recognition ([#2470](https://github.com/open-mmlab/mmaction2/pull/2470))
+- CLIP4Clip video retrieval ([#2489](https://github.com/open-mmlab/mmaction2/pull/2489))
+- Kinetics-710 dataset ([#2534](https://github.com/open-mmlab/mmaction2/pull/2534))
+- Gesture recognition project ([#2539](https://github.com/open-mmlab/mmaction2/pull/2539))
+- VideoMAE on action detection ([#2547](https://github.com/open-mmlab/mmaction2/pull/2547))
+- Dataset download via `mim` ([#2465](https://github.com/open-mmlab/mmaction2/pull/2465))
+- Pure Python config format ([#2542](https://github.com/open-mmlab/mmaction2/pull/2542))
+
+### Improvements
+
+- Enhanced inference APIs ([#2472](https://github.com/open-mmlab/mmaction2/pull/2472))
+- ONNX export for ST-GCN and PoseC3D ([#2543](https://github.com/open-mmlab/mmaction2/pull/2543))
+- Feature extraction head ([#2525](https://github.com/open-mmlab/mmaction2/pull/2525))
+
+### Bug fixes
+
+- Multi-label classification fixes ([#2425](https://github.com/open-mmlab/mmaction2/pull/2425), [#2466](https://github.com/open-mmlab/mmaction2/pull/2466), [#2532](https://github.com/open-mmlab/mmaction2/pull/2532))
+- ImgAug compatibility with NumPy ([#2451](https://github.com/open-mmlab/mmaction2/pull/2451))
+- MViT `with_cls_token` argument ([#2480](https://github.com/open-mmlab/mmaction2/pull/2480))
+- Minimum PyTorch version raised to 1.8.1 ([#2568](https://github.com/open-mmlab/mmaction2/pull/2568))
+
+---
+
+## v1.0.0 — April 6, 2023
+
+First stable 1.x release. Adds RGB-PoseC3D, UniFormer V2 training, and skeleton-based models from the projects directory.
+
+**Highlights**
+
+- RGB-PoseC3D (CVPR 2022)
+- UniFormer V2 training (Arxiv 2022)
+- MSG3D (CVPR 2020) and CTRGCN (CVPR 2021) via the projects directory
+- Refactored, user-friendly documentation
+
+### New features
+
+- RGB-PoseC3D ([#2182](https://github.com/open-mmlab/mmaction2/pull/2182))
+- UniFormer V2 training ([#2221](https://github.com/open-mmlab/mmaction2/pull/2221))
+- MSG3D and CTRGCN in `projects/` ([#2269](https://github.com/open-mmlab/mmaction2/pull/2269), [#2291](https://github.com/open-mmlab/mmaction2/pull/2291))
+
+### Improvements
+
+- FLOPs calculation via MMEngine ([#2300](https://github.com/open-mmlab/mmaction2/pull/2300))
+- Faster LFB training ([#2294](https://github.com/open-mmlab/mmaction2/pull/2294))
+- AVA evaluation multiprocessing ([#2146](https://github.com/open-mmlab/mmaction2/pull/2146))
+
+### Bug fixes
+
+- TSM flip config for Something-Something v1/v2 ([#2247](https://github.com/open-mmlab/mmaction2/pull/2247))
+- PyTorch 2.0 `--local-rank` argument compatibility ([#2320](https://github.com/open-mmlab/mmaction2/pull/2320))
+
+---
+
+## v1.0.0rc3 — February 10, 2023
+
+- UniFormer V1 (ICLR 2022) and V2 ([#2153](https://github.com/open-mmlab/mmaction2/pull/2153))
+- MViT V2 training and MaskFeat fine-tuning ([#2186](https://github.com/open-mmlab/mmaction2/pull/2186))
+- Unified `Inferencer` API ([#2164](https://github.com/open-mmlab/mmaction2/pull/2164))
+
+## v1.0.0rc2 — January 10, 2023
+
+- VideoMAE (NeurIPS 2022), MViT V2 (CVPR 2022), C2D, STGCN++
+- Omni-Source training on ImageNet and Kinetics
+- ONNX export for spatial-temporal detection models
+- Real-time webcam demo ([#2152](https://github.com/open-mmlab/mmaction2/pull/2152))
+- AVA-Kinetics dataset ([#2080](https://github.com/open-mmlab/mmaction2/pull/2080))
+
+## v1.0.0rc1 — October 14, 2022
+
+- Video Swin Transformer ([#1939](https://github.com/open-mmlab/mmaction2/pull/1939))
+- Skeleton-based action recognition demo ([#1920](https://github.com/open-mmlab/mmaction2/pull/1920))
+- Colab tutorial for 1.x ([#1956](https://github.com/open-mmlab/mmaction2/pull/1956))
+
+## v1.0.0rc0 — September 1, 2022
+
+The first release in the 1.x series, built on the new MMEngine training engine.
+
+<Warning>
+  This release introduced **breaking changes** in dataset interfaces, config structure, model APIs, and evaluation. See the [migration guide](https://mmaction2.readthedocs.io/en/latest/migration.html) for instructions on porting 0.x configs and code.
+</Warning>
+
+Key changes from 0.x:
+
+- Replaced the custom runner with MMEngine's unified runner
+- Unified train/test/dataset/evaluation/visualization interfaces across all OpenMMLab 2.0 projects
+- Significantly refactored configuration file structure
+
+---
+
+## 0.x series highlights
+
+The 0.x series (on the `master` branch) is in maintenance mode. Key milestones included:
+
+| Version | Date | Notable additions |
+|---------|------|-------------------|
+| 0.24.0 | May 2022 | MLU backend support, different random seeds |
+| 0.22.0 | Mar 2022 | Multigrid training, CPU training, audio demo |
+| 0.21.0 | Dec 2021 | 2s-AGCN skeleton model, BABEL dataset |
+| 0.20.0 | Oct 2021 | TorchServe support, 3D skeleton preprocessing |
+| 0.19.0 | Oct 2021 | ST-GCN, refactored inference API |
+| 0.17.0 | Aug 2021 | PyTorchVideo transforms, PreciseBN |
+| 0.16.0 | Jul 2021 | TimeSformer, PIMS decoder, timm backbone support |
+| 0.15.0 | May 2021 | PoseC3D, ACRN, MIM support |
+| 0.12.0 | Feb 2021 | TSM-MobileNetV2, TANet, GPU Normalize |
+
+<Tip>
+  For the complete 0.x changelog with all pull request references, see the [changelog.md](https://github.com/open-mmlab/mmaction2/blob/master/docs/en/changelog.md) on the `master` branch.
+</Tip>

@@ -1,0 +1,302 @@
+---
+title: "Add custom backbones, heads, and losses to MMAction2"
+description: "Extend MMAction2 with custom model components by implementing and registering new backbones, recognition heads, and loss functions using the modular registry."
+---
+
+MMAction2's model system is built around a registry pattern: every component (backbone, head, loss, full recognizer) is a Python class decorated with `@MODELS.register_module()`. Once registered, the class becomes available by name in any config file. You can add new components without modifying the library source — just write a class, register it, and reference it in your config.
+
+<Note>
+Run `from mmaction.utils import register_all_modules; register_all_modules(init_default_scope=True)` at the top of any standalone script to ensure all built-in modules are also registered before you build your own.
+</Note>
+
+## Model component overview
+
+A recognizer in MMAction2 is composed of independently registered sub-modules:
+
+<CardGroup cols={2}>
+  <Card title="Backbone" icon="cube">
+    Extracts spatial–temporal features from the input tensor. Inherits from `BaseModule` (or `nn.Module`).
+  </Card>
+  <Card title="Neck (optional)" icon="link">
+    Fuses or aggregates backbone outputs before passing to the head. Used in multi-scale or temporal pyramid designs.
+  </Card>
+  <Card title="Head" icon="bullseye">
+    Maps features to class scores and computes the loss. Inherits from `BaseHead`.
+  </Card>
+  <Card title="Loss" icon="calculator">
+    A standalone `nn.Module` that computes scalar losses from logits and labels. Inherits from `BaseWeightedLoss`.
+  </Card>
+</CardGroup>
+
+## Adding a custom backbone
+
+A backbone receives a video tensor of shape `[N, C, T, H, W]` and returns features. Inherit from `mmengine.model.BaseModule` (which adds `init_weights` and `init_cfg` support) and decorate with `@MODELS.register_module()`.
+
+```python
+# mmaction/models/backbones/my_backbone.py
+import torch.nn as nn
+from mmengine.model import BaseModule, Sequential
+from mmaction.registry import MODELS
+
+
+@MODELS.register_module()
+class MyBackbone(BaseModule):
+    """A minimal 3D convolutional backbone.
+
+    Args:
+        in_channels (int): Number of input channels. Defaults to 3.
+        base_channels (int): Number of channels in the first conv layer.
+            Defaults to 64.
+        init_cfg (dict, optional): Weight initialization config.
+    """
+
+    def __init__(self,
+                 in_channels: int = 3,
+                 base_channels: int = 64,
+                 init_cfg=None):
+        if init_cfg is None:
+            init_cfg = [
+                dict(type='Kaiming', layer='Conv3d',
+                     mode='fan_out', nonlinearity='relu'),
+                dict(type='Constant', layer='BatchNorm3d', val=1, bias=0),
+            ]
+        super().__init__(init_cfg=init_cfg)
+
+        self.layer1 = Sequential(
+            nn.Conv3d(in_channels, base_channels,
+                      kernel_size=(3, 7, 7), stride=(1, 2, 2), padding=(1, 3, 3)),
+            nn.BatchNorm3d(base_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.layer2 = Sequential(
+            nn.Conv3d(base_channels, base_channels * 2,
+                      kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm3d(base_channels * 2),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        # x: [N, C, T, H, W]
+        x = self.layer1(x)
+        x = self.layer2(x)
+        return x
+```
+
+Then register it in `mmaction/models/backbones/__init__.py`:
+
+```python
+from .my_backbone import MyBackbone
+
+__all__ = [..., 'MyBackbone']
+```
+
+## Adding a custom recognition head
+
+A head receives the backbone's feature tensor and computes class scores, a loss, and predictions. Inherit from `BaseHead`, which already implements `loss`, `predict`, `loss_by_feat`, `predict_by_feat`, and `average_clip`. You only need to implement `forward`.
+
+```python
+# mmaction/models/heads/my_head.py
+import torch.nn as nn
+from torch import Tensor
+from mmaction.registry import MODELS
+from mmaction.utils import ConfigType
+from .base import BaseHead
+
+
+@MODELS.register_module()
+class MyHead(BaseHead):
+    """Simple pooling + FC classification head.
+
+    Args:
+        num_classes (int): Number of action classes.
+        in_channels (int): Number of channels from the backbone output.
+        loss_cls (dict): Loss config. Defaults to CrossEntropyLoss.
+        dropout_ratio (float): Dropout probability. Defaults to 0.5.
+        init_std (float): Std for linear layer initialization. Defaults to 0.01.
+    """
+
+    def __init__(self,
+                 num_classes: int,
+                 in_channels: int,
+                 loss_cls: ConfigType = dict(type='CrossEntropyLoss'),
+                 dropout_ratio: float = 0.5,
+                 init_std: float = 0.01,
+                 **kwargs):
+        super().__init__(num_classes, in_channels, loss_cls, **kwargs)
+        self.dropout_ratio = dropout_ratio
+        self.init_std = init_std
+        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+        self.dropout = nn.Dropout(dropout_ratio) if dropout_ratio > 0 else None
+        self.fc = nn.Linear(in_channels, num_classes)
+
+    def init_weights(self):
+        nn.init.normal_(self.fc.weight, 0, self.init_std)
+        nn.init.constant_(self.fc.bias, 0)
+
+    def forward(self, x: Tensor, **kwargs) -> Tensor:
+        # x: [N, in_channels, T, H, W]
+        x = self.avg_pool(x)          # [N, in_channels, 1, 1, 1]
+        x = x.flatten(1)              # [N, in_channels]
+        if self.dropout is not None:
+            x = self.dropout(x)
+        return self.fc(x)             # [N, num_classes]
+```
+
+Register the head in `mmaction/models/heads/__init__.py`:
+
+```python
+from .my_head import MyHead
+
+__all__ = [..., 'MyHead']
+```
+
+<Tip>
+`BaseHead.loss_by_feat` already handles label smoothing and per-step top-k accuracy logging. If you inherit from `BaseHead` and only override `forward`, you get all of this for free.
+</Tip>
+
+## Adding a custom loss function
+
+Loss functions inherit from `BaseWeightedLoss`, which multiplies the scalar output by `loss_weight` automatically. Implement `_forward(cls_score, label, **kwargs)`.
+
+```python
+# mmaction/models/losses/my_loss.py
+import torch
+import torch.nn.functional as F
+from mmaction.registry import MODELS
+from .base import BaseWeightedLoss
+
+
+@MODELS.register_module()
+class FocalLoss(BaseWeightedLoss):
+    """Focal loss for action recognition.
+
+    Args:
+        loss_weight (float): Scalar multiplied on the loss. Defaults to 1.0.
+        gamma (float): Focusing parameter. Defaults to 2.0.
+    """
+
+    def __init__(self, loss_weight: float = 1.0, gamma: float = 2.0):
+        super().__init__(loss_weight=loss_weight)
+        self.gamma = gamma
+
+    def _forward(self, cls_score: torch.Tensor,
+                 label: torch.Tensor, **kwargs) -> torch.Tensor:
+        log_pt = F.log_softmax(cls_score, dim=1)
+        pt = torch.exp(log_pt)
+        log_pt = (1 - pt) ** self.gamma * log_pt
+        loss = F.nll_loss(log_pt, label, **kwargs)
+        return loss
+```
+
+Register in `mmaction/models/losses/__init__.py`:
+
+```python
+from .my_loss import FocalLoss
+
+__all__ = [..., 'FocalLoss']
+```
+
+## Combining components into a new recognizer
+
+For most tasks you can compose your backbone and head inside the existing `Recognizer3D` framework. You only need a new recognizer class when you require a fundamentally different `extract_feat` logic.
+
+```python
+# mmaction/models/recognizers/my_recognizer.py
+import torch
+from torch import Tensor
+from mmaction.registry import MODELS
+from mmaction.utils import OptSampleList
+from .base import BaseRecognizer
+
+
+@MODELS.register_module()
+class MyRecognizer(BaseRecognizer):
+    """Recognizer with two-stream feature fusion."""
+
+    def extract_feat(self,
+                     inputs: Tensor,
+                     stage: str = 'neck',
+                     data_samples: OptSampleList = None,
+                     test_mode: bool = False) -> tuple:
+        # Flatten num_clips into batch dimension
+        inputs = inputs.view((-1,) + inputs.shape[2:])
+        x = self.backbone(inputs)
+        loss_kwargs = dict()
+        if self.with_neck:
+            x, loss_aux = self.neck(x, data_samples=data_samples)
+            loss_kwargs['loss_aux'] = loss_aux
+        return x, loss_kwargs
+```
+
+## Using custom components in a config file
+
+Once registered, reference any component by its class name under the `type` key. The registry resolves the name to the class at build time.
+
+```python
+model = dict(
+    type='Recognizer3D',          # built-in recognizer
+    backbone=dict(
+        type='MyBackbone',        # your custom backbone
+        in_channels=3,
+        base_channels=64,
+    ),
+    cls_head=dict(
+        type='MyHead',            # your custom head
+        num_classes=400,
+        in_channels=128,
+        loss_cls=dict(
+            type='FocalLoss',     # your custom loss
+            loss_weight=1.0,
+            gamma=2.0,
+        ),
+        dropout_ratio=0.5,
+        average_clips='prob',
+    ),
+    data_preprocessor=dict(
+        type='ActionDataPreprocessor',
+        mean=[123.675, 116.28, 103.53],
+        std=[58.395, 57.12, 57.375],
+        format_shape='NCTHW',
+    ),
+)
+```
+
+<Warning>
+If your custom module lives outside the `mmaction` package (e.g. in a local `my_project/` folder), you must explicitly import it before calling `MODELS.build()`, or set `custom_imports` in your config:
+
+```python
+custom_imports = dict(imports=['my_project.models'], allow_failed_imports=False)
+```
+</Warning>
+
+## Full end-to-end example
+
+The following snippet shows all pieces working together, adapted from the framework guide:
+
+```python
+from mmaction.utils import register_all_modules
+from mmaction.registry import MODELS
+
+register_all_modules(init_default_scope=True)
+
+model_cfg = dict(
+    type='Recognizer3D',
+    backbone=dict(type='MyBackbone', in_channels=3, base_channels=64),
+    cls_head=dict(
+        type='MyHead',
+        num_classes=400,
+        in_channels=128,
+        loss_cls=dict(type='CrossEntropyLoss'),
+        average_clips='prob',
+    ),
+    data_preprocessor=dict(
+        type='ActionDataPreprocessor',
+        mean=[123.675, 116.28, 103.53],
+        std=[58.395, 57.12, 57.375],
+        format_shape='NCTHW',
+    ),
+)
+
+model = MODELS.build(model_cfg)
+model.init_weights()
+```

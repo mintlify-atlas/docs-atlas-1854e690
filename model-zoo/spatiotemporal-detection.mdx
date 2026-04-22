@@ -1,0 +1,176 @@
+---
+title: "Spatio-temporal action detection in MMAction2"
+description: "Detect actors and classify their actions in video with MMAction2's AVA-based detection models including SlowOnly, SlowFast, and VideoMAE detectors."
+---
+
+Spatio-temporal action detection is the task of simultaneously locating actors in video frames (using bounding boxes) and classifying what action each actor is performing. Unlike temporal action localization, which only finds _when_ an action occurs, spatio-temporal detection answers _who_, _where_, and _what_ at each moment in a video. MMAction2 implements this using a two-stage pipeline: a video feature extractor coupled with a region-based detection head that classifies actor proposals.
+
+## Task overview
+
+MMAction2's detection pipeline follows the approach used in the AVA benchmark:
+
+1. **Person detection** — An off-the-shelf person detector (Faster R-CNN from MMDetection) identifies bounding boxes in each keyframe.
+2. **Video feature extraction** — A 3D video backbone extracts spatio-temporal features for the video clip surrounding each keyframe.
+3. **RoI pooling + classification** — Features within each detected bounding box are pooled and passed to a multilabel action classifier.
+
+This two-stage design allows the detection head to be trained independently of the person detector, and makes it straightforward to swap video backbones.
+
+<Note>
+Spatio-temporal detection in MMAction2 requires [MMDetection](https://github.com/open-mmlab/mmdetection) for the person detection stage. Install it with `mim install mmdet`.
+</Note>
+
+## Supported datasets
+
+| Dataset | Videos | Action classes | Annotation | Evaluation |
+|---|---|---|---|---|
+| AVA 2.1 | 430 clips | 80 | Person boxes + action labels at 1 fps | mAP at IoU 0.5 |
+| AVA 2.2 | 430 clips | 80 | Person boxes + action labels at 1 fps | mAP at IoU 0.5 |
+| AVA-Kinetics | AVA clips + Kinetics | 80 | AVA-style on Kinetics videos | mAP at IoU 0.5 |
+| MultiSports | 3,200 clips | 66 | Dense spatio-temporal tubes | frame-mAP, video-mAP |
+| UCF101-24 | 3,207 | 24 | Spatio-temporal tubes | mAP |
+| JHMDB | 928 | 21 | Pose + bounding boxes | mAP |
+
+## Supported models
+
+<Tabs>
+  <Tab title="SlowOnly">
+    ### SlowOnly + Fast R-CNN (ICCV 2019)
+
+    The Slow pathway from SlowFast used as a standalone video backbone for action detection. It operates at a low frame rate over a long clip to emphasize spatial semantics, and is combined with RoI-Align pooled features that are fed to a Fast R-CNN classification head.
+
+    **AVA 2.1 results:**
+
+    | Backbone | Pretrain | Sampling | mAP |
+    |---|---|---|---|
+    | SlowOnly ResNet-50 | Kinetics-400 | 4×16×1 | 20.72 |
+    | SlowOnly ResNet-50 | Kinetics-700 | 4×16×1 | 22.77 |
+    | SlowOnly ResNet-50 + NonLocal | Kinetics-400 | 4×16×1 | 21.55 |
+    | SlowOnly ResNet-50 + NonLocal | Kinetics-400 | 8×8×1 | 23.77 |
+    | SlowOnly ResNet-101 | Kinetics-400 | 8×8×1 | 24.83 |
+
+    **AVA 2.2 (trained on AVA-Kinetics) results:**
+
+    | Backbone | Pretrain | Sampling | mAP |
+    |---|---|---|---|
+    | SlowOnly ResNet-50 | Kinetics-400 | 4×16×1 | 24.53 |
+    | SlowOnly ResNet-50 | Kinetics-700 | 4×16×1 | 25.87 |
+    | SlowOnly ResNet-50 | Kinetics-400 | 8×8×1 | 26.10 |
+    | SlowOnly ResNet-50 | Kinetics-700 | 8×8×1 | 27.82 |
+
+    Training tricks ablation (AVA 2.2, SlowOnly 8×8, K700 pretrain):
+
+    | Method | mAP |
+    |---|---|
+    | Baseline | 27.82 |
+    | + context feature | 28.31 |
+    | + temporal max pooling | 28.48 |
+    | + nonlinear head | 29.83 |
+    | + focal loss | 30.33 |
+    | + more frames (16×4×1) | 31.29 |
+
+    **MultiSports results (SlowOnly ResNet-50, K400 pretrain):**
+
+    | Sampling | f-mAP | v-mAP@0.2 | v-mAP@0.5 | v-mAP@0.1:0.9 |
+    |---|---|---|---|---|
+    | 4×16×1 | 26.40 | 15.48 | 10.62 | 9.65 |
+  </Tab>
+  <Tab title="SlowFast">
+    ### SlowFast + Fast R-CNN (ICCV 2019)
+
+    SlowFast combines a Slow pathway (low frame rate, large channel capacity) and a Fast pathway (high frame rate, small channel capacity) via lateral connections. The fused representation is fed to a region-based action classification head.
+
+    **AVA 2.1 results:**
+
+    | Backbone | Pretrain | Sampling | mAP |
+    |---|---|---|---|
+    | SlowFast ResNet-50 | Kinetics-400 | 4×16×1 | 24.32 |
+    | SlowFast ResNet-50 (with context) | Kinetics-400 | 4×16×1 | 25.34 |
+    | SlowFast ResNet-50 | Kinetics-400 | 8×8×1 | 25.80 |
+
+    **AVA 2.2 results:**
+
+    | Backbone | Pretrain | Sampling | mAP |
+    |---|---|---|---|
+    | SlowFast ResNet-50 | Kinetics-400 | 8×8×1 | 25.90 |
+    | SlowFast ResNet-50 (temporal-max) | Kinetics-400 | 8×8×1 | 26.41 |
+    | SlowFast ResNet-50 (temporal-max, focal loss) | Kinetics-400 | 8×8×1 | 26.65 |
+
+    **MultiSports results (SlowFast ResNet-50, K400 pretrain):**
+
+    | Sampling | f-mAP | v-mAP@0.2 | v-mAP@0.5 | v-mAP@0.1:0.9 |
+    |---|---|---|---|---|
+    | 4×16×1 | 36.88 | 22.83 | 16.90 | 14.74 |
+  </Tab>
+  <Tab title="ACRN">
+    ### ACRN — Actor-Centric Relation Network (ECCV 2018)
+
+    ACRN augments an existing detection backbone with an actor-centric relational module that computes pairwise relations between each detected actor and all other actors and scene elements in the frame. The relation features are accumulated and concatenated to the actor's RoI feature before classification. ACRN improves performance on actions that require understanding interactions (e.g., "hand shake", "embrace").
+
+    **AVA 2.1 results (SlowFast ResNet-50, K400 pretrain, 8×8×1):**
+
+    | Dataset | mAP |
+    |---|---|
+    | AVA 2.1 | 27.65 |
+    | AVA 2.2 | 27.71 |
+  </Tab>
+  <Tab title="LFB">
+    ### LFB — Long-Term Feature Bank (CVPR 2019)
+
+    LFB augments a short-term action recognition backbone with a long-term feature bank that stores features from all other clips in the same video. A non-local attention operator retrieves the most relevant historical and future context to support the current clip's classification, enabling temporal reasoning over the full video duration at inference time.
+
+    **Supported datasets:** AVA 2.1
+  </Tab>
+  <Tab title="VideoMAE">
+    ### VideoMAE (NeurIPS 2022)
+
+    VideoMAE-pretrained ViT backbones can be fine-tuned for spatio-temporal action detection on AVA-Kinetics. The masked autoencoder pre-training provides rich spatio-temporal representations that transfer well to the detection task.
+
+    **AVA 2.2 results (trained on AVA-Kinetics):**
+
+    | Backbone | Pretrain | Sampling | mAP |
+    |---|---|---|---|
+    | ViT-Base | Kinetics-400 | 16×4×1 | 33.6 |
+    | ViT-Large | Kinetics-400 | 16×4×1 | 38.7 |
+  </Tab>
+</Tabs>
+
+## Running detection training and inference
+
+### Training
+
+```bash
+python tools/train.py \
+  configs/detection/slowfast/slowfast_kinetics400-pretrained-r50_8xb16-4x16x1-20e_ava21-rgb.py \
+  --seed 0 --deterministic
+```
+
+### Evaluating a checkpoint
+
+```bash
+python tools/test.py \
+  configs/detection/slowfast/slowfast_kinetics400-pretrained-r50_8xb16-4x16x1-20e_ava21-rgb.py \
+  checkpoints/slowfast_ava21.pth \
+  --dump result.pkl
+```
+
+## Data preparation
+
+Spatio-temporal detection requires:
+
+1. **Keyframe extraction** — Extract the center frame for each 1-second interval in AVA videos.
+2. **Pre-computed person boxes** — Obtain person detections from a trained Faster R-CNN detector and store them in the AVA proposal format.
+3. **Video clips** — Store video clips around each keyframe for feature extraction.
+
+Refer to the AVA, AVA-Kinetics, and MultiSports data preparation guides in `tools/data/` for dataset-specific instructions.
+
+## Evaluation metrics
+
+| Metric | Description |
+|---|---|
+| mAP@0.5 | Mean average precision at temporal IoU threshold 0.5 (standard AVA metric) |
+| f-mAP | Frame-level mAP: evaluates detection results independently at each frame |
+| v-mAP@T | Video-level mAP: uses 3D IoU to evaluate full action tubes at threshold T |
+
+<Tip>
+MultiSports uses both f-mAP and v-mAP. For fair comparison against published methods, report both metrics at the thresholds specified in the MultiSports competition.
+</Tip>

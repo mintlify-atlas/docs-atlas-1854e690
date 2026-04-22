@@ -1,0 +1,161 @@
+---
+title: "Temporal action localization models in MMAction2"
+description: "Detect when actions start and end in untrimmed videos using MMAction2's BSN, BMN, and TCANet models on ActivityNet and THUMOS benchmarks."
+---
+
+Temporal action localization is the task of finding the start and end times of action instances inside long, untrimmed videos. Unlike action recognition, which classifies pre-segmented clips, localization models must simultaneously decide _where_ an action occurs in time and, in the full detection setting, _what_ action it is. MMAction2 supports a proposal-generation pipeline in which a localization model first generates candidate temporal segments, and an external classifier then assigns action labels.
+
+## Task overview
+
+The localization pipeline in MMAction2 has two stages:
+
+1. **Proposal generation** — A localization model processes per-frame or per-segment features extracted from a pre-trained recognition network and outputs a ranked list of temporal proposals with confidence scores.
+2. **Action classification** — An external action classifier (e.g., trained on ActivityNet labels) assigns action categories to each accepted proposal.
+
+Evaluation metrics used for proposal generation are AR@AN (average recall at different average numbers of proposals) and AUC (area under the recall-proposal curve). For full detection results, mean average precision (mAP) at IoU thresholds is used.
+
+## Supported datasets
+
+| Dataset | Videos | Action classes | Avg. duration | Annotation |
+|---|---|---|---|---|
+| ActivityNet-1.3 | ~20 K | 200 | ~3 min | Temporal segments |
+| THUMOS14 | 413 (test) | 20 | ~4 min | Temporal segments |
+| HACS | ~140 K | 200 | ~2.6 min | Temporal segments |
+
+<Info>
+Localization models in MMAction2 operate on pre-extracted features, not raw video. You must first extract video features using a recognition backbone (e.g., the provided SlowOnly Kinetics-700 extractor) before running localization training or inference.
+</Info>
+
+## Supported models
+
+<CardGroup cols={3}>
+  <Card title="BSN" icon="wave-square">
+    Boundary Sensitive Network (ECCV 2018) for temporal proposal generation with high recall.
+  </Card>
+  <Card title="BMN" icon="chart-line">
+    Boundary-Matching Network (ICCV 2019) for end-to-end proposal generation with confidence scoring.
+  </Card>
+  <Card title="TCANet" icon="network-wired">
+    Temporal Context Aggregation Network (CVPR 2021) for high-quality proposal refinement.
+  </Card>
+</CardGroup>
+
+---
+
+### BSN — Boundary Sensitive Network (ECCV 2018)
+
+BSN adopts a local-to-global strategy. It first uses a Temporal Evaluation Module (TEM) to estimate the probabilities of each frame being an action start, end, or interior. A Proposal Generation Module (PGM) then combines high-probability boundaries to form candidate proposals, and a Proposal Evaluation Module (PEM) assigns a confidence score to each using the Boundary-Sensitive Proposal (BSP) feature.
+
+Training is a three-stage process:
+
+<Steps>
+  <Step title="Train the Temporal Evaluation Module (TEM)">
+    ```bash
+    python tools/train.py \
+      configs/localization/bsn/bsn_tem_1xb16-400x100-20e_activitynet-feature.py
+    ```
+  </Step>
+  <Step title="Generate proposals with the Proposal Generation Module (PGM)">
+    ```bash
+    python tools/misc/bsn_proposal_generation.py \
+      configs/localization/bsn/bsn_pgm_400x100_activitynet-feature.py --mode train
+    python tools/misc/bsn_proposal_generation.py \
+      configs/localization/bsn/bsn_pgm_400x100_activitynet-feature.py --mode test
+    ```
+  </Step>
+  <Step title="Train the Proposal Evaluation Module (PEM)">
+    ```bash
+    python tools/train.py \
+      configs/localization/bsn/bsn_pem_1xb16-400x100-20e_activitynet-feature.py
+    ```
+  </Step>
+</Steps>
+
+**Results on ActivityNet-1.3 (proposal generation):**
+
+| Feature | AUC | AR@1 | AR@5 | AR@10 | AR@100 |
+|---|---|---|---|---|---|
+| cuhk_mean_100 | 66.26 | 32.71 | 48.43 | 55.28 | 74.27 |
+| slowonly-k700 | 67.63 | 33.04 | 48.79 | 56.01 | 75.74 |
+
+---
+
+### BMN — Boundary-Matching Network (ICCV 2019)
+
+BMN introduces a Boundary-Matching (BM) mechanism that evaluates confidence scores for all densely distributed start-end boundary pairs simultaneously. The BM confidence map encodes the likelihood of an action occurring within each candidate interval, enabling end-to-end training without a separate PGM stage.
+
+**Training:**
+
+```bash
+bash tools/dist_train.sh \
+  configs/localization/bmn/bmn_2xb8-400x100-9e_activitynet-feature.py 2
+```
+
+**Results on ActivityNet-1.3 (proposal generation):**
+
+| Feature | AUC | AR@1 | AR@5 | AR@10 | AR@100 |
+|---|---|---|---|---|---|
+| cuhk_mean_100 | 67.25 | 32.89 | 49.43 | 56.64 | 75.29 |
+| slowonly-k700 | 68.04 | 33.44 | 50.53 | 57.65 | 75.77 |
+
+---
+
+### TCANet — Temporal Context Aggregation Network (CVPR 2021)
+
+TCANet improves proposal quality through two mechanisms: a Local-Global Temporal Encoder (LGTE) that aggregates temporal context at both fine-grained and global scales using channel grouping, and a Temporal Boundary Regressor (TBR) that refines proposal boundaries at both frame and segment levels in a progressive, end-to-end manner. TCANet won first place in the CVPR 2020 HACS challenge on temporal action localization.
+
+**Training on HACS:**
+
+```bash
+bash tools/dist_train.sh \
+  configs/localization/tcanet/tcanet_2xb8-700x100-9e_hacs-feature.py 2
+```
+
+**Results on HACS (proposal generation, SlowOnly features):**
+
+| AUC | AR@1 | AR@5 | AR@10 | AR@100 |
+|---|---|---|---|---|
+| 51.39 | 3.61 | 16.92 | 21.94 | 62.80 |
+
+---
+
+## Running inference
+
+After training, evaluate a localization model with `tools/test.py`:
+
+```bash
+python tools/test.py \
+  configs/localization/bmn/bmn_2xb8-400x100-9e_activitynet-feature.py \
+  checkpoints/bmn_activitynet.pth
+```
+
+To convert proposals to a format accepted by action classifiers such as SSN or P-GCN:
+
+```bash
+python tools/data/activitynet/convert_proposal_format.py
+```
+
+## Feature extraction
+
+All localization models consume pre-extracted features. MMAction2 provides a SlowOnly model trained on Kinetics-700 whose features yield stronger proposal recall than the commonly used `cuhk_mean_100` features:
+
+```bash
+# Extract SlowOnly-K700 features for ActivityNet videos
+python tools/misc/clip_feature_extraction.py \
+  configs/recognition/slowonly/slowonly_imagenet-pretrained-r50_16xb16-8x8x1-steplr-150e_kinetics700-rgb.py \
+  checkpoints/slowonly_k700.pth \
+  --video-list data/ActivityNet/video_list.txt \
+  --out-dir data/ActivityNet/slowonly_feature/
+```
+
+<Tip>
+Use the `slowonly-k700` feature set for BSN and BMN to get higher AUC scores compared to `cuhk_mean_100`. Download links are provided in the ActivityNet data preparation guide.
+</Tip>
+
+## Evaluation metrics
+
+| Metric | Description |
+|---|---|
+| AR@AN | Average recall at a given average number of proposals (AN). AR@100 is the most commonly reported. |
+| AUC | Area under the AR vs. proposal count curve, integrated over the range [0, 100]. |
+| mAP@IoU | Mean average precision at a temporal IoU threshold, used for full detection with classification. |

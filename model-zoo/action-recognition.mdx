@@ -1,0 +1,310 @@
+---
+title: "Action recognition models in MMAction2"
+description: "Browse MMAction2's 20+ pre-trained action recognition models including TSN, TSM, I3D, SlowFast, VideoMAE, and UniFormer with Kinetics-400 benchmarks."
+---
+
+MMAction2 provides pre-trained models for trimmed video action recognition across three architectural families: 2D CNNs that operate on individual frames or temporal segments, 3D CNNs that learn joint spatio-temporal features directly from video clips, and transformers that apply attention mechanisms over space and time. All models follow a unified config-based interface and are downloadable via OpenMIM.
+
+## Config naming convention
+
+MMAction2 config filenames encode the training setup. For example:
+
+```
+tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py
+│   │                    │    │    │      │    │            └─ modality
+│   │                    │    │    │      │    └─ dataset
+│   │                    │    │    │      └─ epochs
+│   │                    │    │    └─ frame sampling (segments x stride x clips)
+│   │                    │    └─ GPUs × batch size per GPU
+│   │                    └─ backbone
+│   └─ pretraining source
+└─ model name
+```
+
+The frame sampling field follows `{num_segments}x{stride}x{num_clips}` for 2D models and `{clip_len}x{frame_interval}x{num_clips}` for 3D models.
+
+## Downloading and using a model
+
+Use `mim download` to fetch a checkpoint and its config file in one step:
+
+```bash
+mim download mmaction2 \
+  --config tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb \
+  --dest .
+```
+
+To run inference on a video with the downloaded model:
+
+```python
+from mmaction.apis import init_recognizer, inference_recognizer
+
+config = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py'
+checkpoint = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth'
+
+model = init_recognizer(config, checkpoint, device='cuda:0')
+result = inference_recognizer(model, 'demo/demo.mp4')
+print(result.pred_score.topk(5))
+```
+
+## Supported datasets
+
+Action recognition models in MMAction2 are benchmarked across several widely used datasets.
+
+| Dataset | Type | Classes | Videos |
+|---|---|---|---|
+| Kinetics-400 | Trimmed clips | 400 | ~240 K |
+| Kinetics-600 | Trimmed clips | 600 | ~360 K |
+| Kinetics-700 | Trimmed clips | 700 | ~650 K |
+| Something-Something V2 | Trimmed clips | 174 | ~220 K |
+| HMDB51 | Trimmed clips | 51 | ~7 K |
+| UCF101 | Trimmed clips | 101 | ~13 K |
+
+## Model families
+
+<Tabs>
+  <Tab title="2D CNN">
+    2D CNN models treat each sampled frame independently or apply lightweight temporal operations on top of 2D convolutions. They are computationally efficient and can match 3D CNN performance on scene-centric datasets.
+
+    ### TSN — Temporal Segment Networks (ECCV 2016)
+
+    TSN divides a video into segments and sparsely samples one frame from each. A shared 2D CNN extracts per-frame features that are averaged before the final classifier. This sparse sampling strategy captures long-range temporal structure at low compute cost.
+
+    **Supported datasets:** Kinetics-400, Something-Something V2, HMDB51, UCF101
+
+    | Backbone | Segments | Kinetics-400 top-1 | Kinetics-400 top-5 | Testing protocol |
+    |---|---|---|---|---|
+    | ResNet-50 | 3 | 72.83 | 90.65 | 25 clips × 10 crop |
+    | ResNet-50 | 5 | 73.80 | 91.21 | 25 clips × 10 crop |
+    | ResNet-50 | 8 | 74.12 | 91.34 | 25 clips × 10 crop |
+    | ResNet-101 | 8 | 75.89 | 92.07 | 25 clips × 10 crop |
+    | Swin Transformer | 8 | 79.22 | 94.20 | 25 clips × 10 crop |
+
+    TSN also accepts plug-in backbones from MMClassification, MMPretrain, TorchVision, and TIMM via the `custom_backbones` config directory.
+
+    ---
+
+    ### TSM — Temporal Shift Module (ICCV 2019)
+
+    TSM inserts a zero-cost temporal shift operation before each residual block, moving a fraction of channels along the time dimension to enable temporal reasoning without extra parameters or FLOPs beyond a standard 2D CNN.
+
+    **Supported datasets:** Kinetics-400, Something-Something V2
+
+    | Backbone | Segments | Kinetics-400 top-1 | Kinetics-400 top-5 | Testing protocol |
+    |---|---|---|---|---|
+    | ResNet-50 | 8 | 73.18 | 90.56 | 8 clips × 10 crop |
+    | ResNet-50 | 16 | 75.12 | 91.55 | 16 clips × 10 crop |
+    | ResNet-50 + NonLocal | 8 | 74.49 | 91.15 | 8 clips × 10 crop |
+    | MobileNetV2 | 8 | 68.71 | 88.32 | 8 clips × 3 crop |
+    | MobileOne-S4 | 16 | 74.38 | 91.71 | 16 clips × 10 crop |
+
+    ---
+
+    ### TRN — Temporal Relation Networks (ECCV 2018)
+
+    TRN learns multi-scale temporal relations between frames sampled at different time steps, capturing short and long-term dependencies through relation modules appended to a 2D CNN backbone.
+
+    **Supported datasets:** Something-Something V1 and V2
+
+    ---
+
+    ### TANet — Temporal Aggregation Network (ArXiv 2020)
+
+    TANet uses a dual-branch design with a local module for fine-grained motion detail and a global module for long-range context, aggregated via element-wise addition before the classification head.
+
+    **Supported datasets:** Kinetics-400, Something-Something V1 and V2
+
+    ---
+
+    ### TIN — Temporal Interlacing Network (AAAI 2020)
+
+    TIN applies a learned interlacing operation that shifts and mixes feature maps along the temporal axis with a controllable routing mechanism, offering an alternative to the fixed shift used by TSM.
+
+    **Supported datasets:** Something-Something V1 and V2
+  </Tab>
+  <Tab title="3D CNN">
+    3D CNN models learn spatio-temporal features by extending 2D convolution kernels into the time dimension, capturing motion patterns directly from raw video clips.
+
+    ### C3D (CVPR 2014)
+
+    C3D was one of the first architectures to demonstrate the effectiveness of 3D convolutions for video representation learning using a simple VGG-style network with 3×3×3 kernels throughout.
+
+    **Supported datasets:** UCF101, Sports-1M
+
+    ---
+
+    ### I3D — Inflated 3D ConvNet (CVPR 2017)
+
+    I3D inflates pre-trained 2D ImageNet weights into 3D by repeating kernel weights along the temporal dimension, enabling efficient transfer of image model knowledge to video. Non-local blocks can be inserted to capture long-range spatio-temporal dependencies.
+
+    **Supported datasets:** Kinetics-400, HMDB51, UCF101
+
+    | Backbone | Sampling | Kinetics-400 top-1 | Kinetics-400 top-5 | Testing protocol |
+    |---|---|---|---|---|
+    | ResNet-50 | 32×2×1 | 73.47 | 91.27 | 10 clips × 3 crop |
+    | ResNet-50 + NonLocal (Dot Product) | 32×2×1 | 74.80 | 92.07 | 10 clips × 3 crop |
+    | ResNet-50 + NonLocal (Embed Gauss) | 32×2×1 | 74.73 | 91.80 | 10 clips × 3 crop |
+    | ResNet-50 Heavy | 32×2×1 | 76.21 | 92.48 | 10 clips × 3 crop |
+
+    ---
+
+    ### C2D (CVPR 2018)
+
+    C2D is a 2D ResNet with temporal global average pooling, serving as a strong baseline to isolate the contribution of 3D convolutions in video models.
+
+    **Supported datasets:** Kinetics-400
+
+    ---
+
+    ### R(2+1)D (CVPR 2018)
+
+    R(2+1)D factorizes 3D convolutions into separate 2D spatial and 1D temporal convolutions, providing a middle ground between 2D and full 3D CNNs that is easier to optimize.
+
+    **Supported datasets:** Kinetics-400
+
+    ---
+
+    ### SlowOnly (ICCV 2019)
+
+    SlowOnly is the Slow pathway of SlowFast used in isolation. It operates at a low frame rate over a long temporal span to capture semantic content, using a ResNet backbone with temporal stride.
+
+    **Supported datasets:** Kinetics-400, Kinetics-700
+
+    ---
+
+    ### SlowFast (ICCV 2019)
+
+    SlowFast combines a Slow pathway (low frame rate, high channel capacity) with a Fast pathway (high frame rate, low channel capacity) using lateral connections to fuse spatial and motion information.
+
+    **Supported datasets:** Kinetics-400
+
+    | Backbone | Sampling | Kinetics-400 top-1 | Kinetics-400 top-5 | FLOPs | Params |
+    |---|---|---|---|---|---|
+    | ResNet-50 | 4×16×1 | 75.55 | 92.35 | 36.3G | 34.5M |
+    | ResNet-50 | 8×8×1 | 76.80 | 92.99 | 66.1G | 34.6M |
+    | ResNet-101 | 8×8×1 | 78.65 | 93.88 | 126G | 62.9M |
+
+    ---
+
+    ### X3D (CVPR 2020)
+
+    X3D progressively expands a 2D baseline network along multiple axes — temporal duration, frame rate, spatial resolution, width, depth, and bottleneck width — to find an optimal efficiency-accuracy tradeoff.
+
+    **Supported datasets:** Kinetics-400
+
+    ---
+
+    ### CSN — Channel-Separated Networks (ICCV 2019)
+
+    CSN factorizes 3D convolutions into pointwise and depthwise components via channel separation, greatly reducing parameters while maintaining accuracy.
+
+    **Supported datasets:** Kinetics-400
+
+    ---
+
+    ### TPN — Temporal Pyramid Network (CVPR 2020)
+
+    TPN builds a feature pyramid in the temporal dimension, fusing representations from multiple temporal scales to capture both fine and coarse motion patterns.
+
+    **Supported datasets:** Kinetics-400, Something-Something V1
+  </Tab>
+  <Tab title="Transformer">
+    Transformer-based models apply self-attention over space and time, often leveraging large-scale pre-training to achieve top accuracy at the cost of higher compute.
+
+    ### TimeSformer (ICML 2021)
+
+    TimeSformer applies divided space-time attention by decomposing multi-head self-attention into separate spatial and temporal attention operations per transformer block, keeping compute manageable relative to joint space-time attention.
+
+    **Supported datasets:** Kinetics-400, Something-Something V2
+
+    ---
+
+    ### Video Swin Transformer (CVPR 2022)
+
+    Video Swin extends the Swin Transformer to video by computing shifted window attention in 3D space-time windows, achieving strong performance with linear complexity in the number of tokens.
+
+    **Supported datasets:** Kinetics-400, Kinetics-600, Something-Something V2
+
+    ---
+
+    ### MViT V2 — Multiscale Vision Transformers (CVPR 2022)
+
+    MViT uses a multiscale pyramid of attention that begins with high-resolution, low-channel features and progressively reduces spatial resolution while expanding channel width, capturing both fine-grained local and coarse global video features.
+
+    **Supported datasets:** Kinetics-400
+
+    ---
+
+    ### VideoMAE (NeurIPS 2022)
+
+    VideoMAE pre-trains a vanilla Vision Transformer by masking 90–95% of video tubes and reconstructing the held-out patches, yielding data-efficient representations that generalize well even on small datasets.
+
+    **Supported datasets:** Kinetics-400, Something-Something V2, UCF101, HMDB51
+
+    | Backbone | Sampling | Kinetics-400 top-1 | Kinetics-400 top-5 | FLOPs | Params |
+    |---|---|---|---|---|---|
+    | ViT-B | 16×4×1 | 81.3 | 95.0 | 180G | 87M |
+    | ViT-L | 16×4×1 | 85.3 | 96.7 | 597G | 305M |
+
+    ---
+
+    ### UniFormer V1 (ICLR 2022)
+
+    UniFormer unifies 3D convolutions and self-attention in a single transformer block: local MHRA (Multi-Head Relation Aggregation) acts as convolution in shallow layers and as full self-attention in deeper layers, efficiently capturing both local motion and global dependencies.
+
+    **Supported datasets:** Kinetics-400, Kinetics-600
+
+    ---
+
+    ### UniFormer V2 (ArXiv 2022)
+
+    UniFormer V2 extends V1 by incorporating CLIP image pre-training into the backbone using adapter-style modules, substantially improving accuracy on standard benchmarks by leveraging large-scale vision-language pre-training.
+
+    **Supported datasets:** Kinetics-400, Kinetics-600, Kinetics-710
+
+    ---
+
+    ### VideoMAE V2 (CVPR 2023)
+
+    VideoMAE V2 scales VideoMAE pre-training to a larger ViT-Giant backbone using dual masking (decoder receives only a small subset of tokens) to reduce training cost, establishing new state-of-the-art results on multiple benchmarks.
+
+    **Supported datasets:** Kinetics-400, Something-Something V2
+  </Tab>
+</Tabs>
+
+## Training a model
+
+Use `tools/train.py` with any config file to start training:
+
+```bash
+python tools/train.py configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    --seed 0 --deterministic
+```
+
+Pass `--auto-scale-lr` to automatically adjust the learning rate when using a different number of GPUs or a different batch size than specified in the config.
+
+For distributed training across multiple GPUs:
+
+```bash
+bash tools/dist_train.sh \
+    configs/recognition/slowfast/slowfast_r50_8xb8-8x8x1-256e_kinetics400-rgb.py \
+    8
+```
+
+## Evaluating a model
+
+Use `tools/test.py` to evaluate a checkpoint and optionally save predictions:
+
+```bash
+python tools/test.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    checkpoints/tsn_r50_k400.pth \
+    --dump result.pkl
+```
+
+<Note>
+The Kinetics-400 validation set used by MMAction2 consists of 19,796 videos and differs slightly from other implementations. Use the provided data list and label map when comparing numbers across codebases.
+</Note>
+
+## OmniSource training
+
+MMAction2 supports the OmniSource framework (ECCV 2020) for multi-source web training, which combines curated video datasets with weakly labeled web images and videos to boost recognition accuracy without changing the model architecture. See `configs/recognition/omnisource/` for configs.

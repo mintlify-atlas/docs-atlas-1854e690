@@ -1,0 +1,192 @@
+---
+title: "Install MMAction2 and its dependencies"
+description: "Step-by-step guide to install MMAction2 with PyTorch, MMCV, and MMEngine. Covers conda setup, MIM-based install, optional deps, and verification."
+---
+
+MMAction2 runs on Linux, Windows, and macOS. It requires **Python 3.7+**, **CUDA 10.2+**, and **PyTorch 1.8+**. This guide walks you through the recommended installation path using conda and [OpenMIM](https://github.com/open-mmlab/mim), then covers installing from source and optional dependencies.
+
+## Prerequisites
+
+Before installing MMAction2, you need a working Python environment with PyTorch. If you already have PyTorch installed, skip to [Install MMAction2](#install-mmaction2).
+
+<Steps>
+  <Step title="Install Miniconda">
+    Download and install Miniconda from the [official website](https://docs.conda.io/en/latest/miniconda.html). Conda manages Python environments and simplifies dependency isolation.
+  </Step>
+  <Step title="Create and activate a conda environment">
+    ```bash
+    conda create --name openmmlab python=3.8 -y
+    conda activate openmmlab
+    ```
+  </Step>
+  <Step title="Install PyTorch">
+    Install PyTorch following the [official instructions](https://pytorch.org/get-started/locally/). Select the appropriate CUDA version for your hardware.
+
+    <CodeGroup>
+      ```bash GPU (recommended)
+      conda install pytorch torchvision -c pytorch
+      ```
+
+      ```bash CPU only
+      conda install pytorch torchvision cpuonly -c pytorch
+      ```
+    </CodeGroup>
+
+    <Warning>
+      The GPU command installs the latest PyTorch with the latest cudatoolkit. Verify that the installed CUDA version matches your GPU driver before proceeding. For Ampere-based GPUs (GeForce 30 series, NVIDIA A100), CUDA 11 is required. For older GPUs, CUDA 10.2 offers better compatibility.
+    </Warning>
+  </Step>
+</Steps>
+
+## Install MMAction2
+
+MMAction2 depends on MMEngine and MMCV. The recommended approach uses [OpenMIM](https://github.com/open-mmlab/mim), which automatically resolves MMCV's PyTorch and CUDA version requirements.
+
+<Steps>
+  <Step title="Install MMEngine and MMCV via MIM">
+    ```bash
+    pip install -U openmim
+    mim install mmengine
+    mim install mmcv
+    ```
+
+    <Warning>
+      MMAction2 1.x requires `mmcv>=2.0.0rc4,<2.2.0` and `mmengine>=0.7.1,<1.0.0`. Installing via MIM ensures compatible versions are selected automatically. If you install MMCV manually with pip, you must specify a find-url that matches your PyTorch and CUDA version.
+    </Warning>
+  </Step>
+  <Step title="Install MMAction2">
+    Choose the installation mode that fits your use case.
+
+    <CodeGroup>
+      ```bash Install from source (recommended)
+      git clone https://github.com/open-mmlab/mmaction2.git
+      cd mmaction2
+      pip install -v -e .
+      ```
+
+      ```bash Install as a Python package
+      pip install mmaction2
+      ```
+    </CodeGroup>
+
+    Installing from source is recommended if you plan to develop custom models, datasets, or pipelines. The `-e` (editable) flag means local code changes take effect immediately without reinstalling. Installing as a package is sufficient if you only need MMAction2's Python API in your own project.
+  </Step>
+</Steps>
+
+## Optional dependencies
+
+Some tasks require additional OpenMMLab libraries.
+
+| Dependency | Required for | Install command |
+|---|---|---|
+| MMDetection | Spatio-temporal action detection (human bounding boxes) | `mim install mmdet` |
+| MMPose | Skeleton-based action recognition (pose estimation) | `mim install mmpose` |
+
+Install both with:
+
+```bash
+mim install mmdet mmpose
+```
+
+## Verify the installation
+
+After installation, confirm everything works by running inference on a sample video.
+
+<Steps>
+  <Step title="Download a config and checkpoint">
+    ```bash
+    mim download mmaction2 \
+        --config tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb \
+        --dest .
+    ```
+  </Step>
+  <Step title="Run the verification">
+    <CodeGroup>
+      ```bash CLI (install from source)
+      # demo.mp4 and label_map_k400.txt are from the Kinetics-400 dataset
+      python demo/demo.py \
+          tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb.py \
+          tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb_20220906-2692d16c.pth \
+          demo/demo.mp4 \
+          tools/data/kinetics/label_map_k400.txt
+      ```
+
+      ```python Python API (package install)
+      from operator import itemgetter
+      from mmaction.apis import init_recognizer, inference_recognizer
+
+      config_file = 'tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb.py'
+      checkpoint_file = 'tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb_20220906-2692d16c.pth'
+      video_file = 'demo/demo.mp4'
+      label_file = 'tools/data/kinetics/label_map_k400.txt'
+
+      model = init_recognizer(config_file, checkpoint_file, device='cpu')
+      pred_result = inference_recognizer(model, video_file)
+
+      pred_scores = pred_result.pred_score.tolist()
+      score_tuples = tuple(zip(range(len(pred_scores)), pred_scores))
+      score_sorted = sorted(score_tuples, key=itemgetter(1), reverse=True)
+      top5_label = score_sorted[:5]
+
+      labels = open(label_file).readlines()
+      labels = [x.strip() for x in labels]
+      results = [(labels[k[0]], k[1]) for k in top5_label]
+
+      print('The top-5 labels with corresponding scores are:')
+      for result in results:
+          print(f'{result[0]}: ', result[1])
+      ```
+    </CodeGroup>
+
+    The CLI prints the top-5 action labels with scores in the terminal. The Python API returns the same information as a list of `(label, score)` tuples.
+  </Step>
+</Steps>
+
+## Version compatibility table
+
+Use these version ranges when troubleshooting dependency conflicts, especially when migrating from MMAction2 0.x to 1.x.
+
+| Package | Required version |
+|---|---|
+| mmaction2 | 1.0.0+ |
+| mmcv | `>=2.0.0rc4, <2.2.0` |
+| mmengine | `>=0.7.1, <1.0.0` |
+| mmdet | 3.0.0+ (optional) |
+| mmpose | 1.0.0+ (optional) |
+
+<Note>
+  Run `pip list | grep mm` to check installed versions in your environment. All listed versions are minimum requirements; ensure each package meets or exceeds the version shown.
+</Note>
+
+## Common installation issues
+
+<AccordionGroup>
+  <Accordion title="MMCV version mismatch after upgrading from 0.x">
+    MMAction2 1.x requires MMCV 2.x, which is not backward compatible with MMCV 1.x used by MMAction2 0.x. If you are migrating, create a fresh conda environment and reinstall all dependencies rather than upgrading in place.
+  </Accordion>
+  <Accordion title="MMCV CUDA extension compilation errors">
+    MMCV contains C++ and CUDA extensions. If you install MMCV with pip instead of MIM, you must use a find-url that matches your exact PyTorch and CUDA version. For example, for PyTorch 1.10 and CUDA 11.3:
+
+    ```bash
+    pip install mmcv -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.10/index.html
+    ```
+
+    See the [MMCV installation guide](https://mmcv.readthedocs.io/en/latest/get_started/installation.html) for the full list of find-urls.
+  </Accordion>
+  <Accordion title="Running on CPU-only machines">
+    MMAction2 supports CPU-only training and inference. Install the `cpuonly` PyTorch variant and pass `device='cpu'` to `init_recognizer`. Most models work correctly in CPU mode; a small number of GPU-compiled ops are unavailable but are not used by the standard model configs.
+  </Accordion>
+  <Accordion title="Running with Docker">
+    A Dockerfile is provided in the repository. Build and run it with:
+
+    ```bash
+    # Build image with PyTorch 1.8.1, CUDA 10.2, CUDNN 7
+    docker build -f ./docker/Dockerfile --rm -t mmaction2 .
+
+    # Run with GPU access and mount your data directory
+    docker run --gpus all --shm-size=8g -it -v {DATA_DIR}:/mmaction2/data mmaction2
+    ```
+
+    Requires Docker version 19.03 or later.
+  </Accordion>
+</AccordionGroup>

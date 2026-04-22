@@ -1,0 +1,283 @@
+---
+title: "Build custom data pipelines and transforms in MMAction2"
+description: "Create custom video preprocessing transforms, sampling strategies, and augmentation pipelines to extend MMAction2's built-in data pipeline."
+---
+
+A data pipeline in MMAction2 is a sequential list of transforms, each expressed as a config dict. When the dataset returns a sample, the `Compose` utility applies each transform in order, passing the output dict of one transform as the input dict of the next. Every transform is a Python class that implements the `transform(results)` method and is registered with `@TRANSFORMS.register_module()`.
+
+## How data pipelines work
+
+The pipeline is configured as a list of dicts in your config file. Each dict has a `type` key (the registered class name) and any constructor arguments:
+
+```python
+train_pipeline = [
+    dict(type='DecordInit'),
+    dict(type='SampleFrames', clip_len=32, frame_interval=2, num_clips=1),
+    dict(type='DecordDecode'),
+    dict(type='Resize', scale=(-1, 256)),
+    dict(type='RandomResizedCrop'),
+    dict(type='Resize', scale=(224, 224), keep_ratio=False),
+    dict(type='Flip', flip_ratio=0.5),
+    dict(type='FormatShape', input_format='NCTHW'),
+    dict(type='PackActionInputs'),
+]
+```
+
+At runtime, `mmengine.dataset.Compose(pipeline_cfg)` builds the transform instances and calls them sequentially. The `results` dict accumulates keys as it passes through the pipeline. By the end, it must contain `inputs` (the video tensor) and `data_samples` (an `ActionDataSample`).
+
+<Info>
+Normalization (mean/std subtraction) and batch-level augmentations such as mixup or cutmix are handled by the `ActionDataPreprocessor`, not inside the pipeline. This allows them to run on GPU over a full batch.
+</Info>
+
+## Built-in transforms reference
+
+<AccordionGroup>
+  <Accordion title="Loading transforms">
+    | Transform | Description |
+    |---|---|
+    | `DecordInit` | Opens a video file with decord and stores the reader in `results['video_reader']` |
+    | `DecordDecode` | Decodes the frames specified by `results['frame_inds']` |
+    | `RawFrameDecode` | Reads pre-extracted frames from disk given `frame_dir` and `frame_inds` |
+    | `OpenCVInit` | Alternative to `DecordInit` using OpenCV |
+    | `OpenCVDecode` | Decodes frames using OpenCV |
+  </Accordion>
+  <Accordion title="Sampling transforms">
+    | Transform | Description |
+    |---|---|
+    | `SampleFrames` | Randomly (train) or uniformly (test) samples `clip_len * num_clips` frame indices |
+    | `DenseSampleFrames` | Dense temporal sampling for action detection |
+    | `UniformSampleFrames` | Uniform sampling used with skeleton data |
+    | `SampleAVAFrames` | Samples a single frame per AVA annotation |
+  </Accordion>
+  <Accordion title="Spatial augmentation transforms">
+    | Transform | Description |
+    |---|---|
+    | `Resize` | Rescales frames to a target size; `scale=(-1, 256)` preserves aspect ratio |
+    | `RandomResizedCrop` | Random crop with random scale and aspect ratio |
+    | `CenterCrop` | Deterministic center crop for evaluation |
+    | `MultiScaleCrop` | Crops at multiple predefined scales |
+    | `Flip` | Random horizontal flip with configurable `flip_ratio` |
+    | `TenCrop` | Produces 10 crops (4 corners + center, × 2 for flips) for testing |
+    | `ThreeCrop` | Produces 3 crops (top, center, bottom or left, center, right) |
+  </Accordion>
+  <Accordion title="Formatting transforms">
+    | Transform | Description |
+    |---|---|
+    | `FormatShape` | Rearranges frame array to `NCTHW`, `NCHW`, or `NPTCHW` |
+    | `PackActionInputs` | Converts NumPy arrays to tensors, packs labels and metainfo into `ActionDataSample` |
+    | `Normalize` | Per-channel mean subtraction and std division (use `ActionDataPreprocessor` for GPU normalization instead) |
+    | `FormatGCNInput` | Formats skeleton keypoints for GCN input |
+  </Accordion>
+</AccordionGroup>
+
+## SampleFrames in detail
+
+`SampleFrames` is the core temporal sampling transform. In training mode it samples frames randomly; in test mode it samples uniformly.
+
+```python
+# Training: random sampling, 1 clip of 32 frames with stride 2
+dict(type='SampleFrames', clip_len=32, frame_interval=2, num_clips=1)
+
+# Testing SlowFast: 10 uniform clips of 32 frames
+dict(
+    type='SampleFrames',
+    clip_len=32,
+    frame_interval=2,
+    num_clips=10,
+    test_mode=True,
+)
+
+# TSN/TSM style: 8 single-frame segments
+dict(type='SampleFrames', clip_len=1, frame_interval=1, num_clips=8)
+```
+
+## Pipeline patterns by task
+
+<Tabs>
+  <Tab title="Video (RGB)">
+    Standard pipeline for video files using decord:
+
+    ```python
+    train_pipeline = [
+        dict(type='DecordInit'),
+        dict(type='SampleFrames', clip_len=32, frame_interval=2, num_clips=1),
+        dict(type='DecordDecode'),
+        dict(type='Resize', scale=(-1, 256)),
+        dict(type='RandomResizedCrop'),
+        dict(type='Resize', scale=(224, 224), keep_ratio=False),
+        dict(type='Flip', flip_ratio=0.5),
+        dict(type='FormatShape', input_format='NCTHW'),
+        dict(type='PackActionInputs'),
+    ]
+
+    val_pipeline = [
+        dict(type='DecordInit'),
+        dict(
+            type='SampleFrames',
+            clip_len=32,
+            frame_interval=2,
+            num_clips=1,
+            test_mode=True),
+        dict(type='DecordDecode'),
+        dict(type='Resize', scale=(-1, 256)),
+        dict(type='CenterCrop', crop_size=224),
+        dict(type='FormatShape', input_format='NCTHW'),
+        dict(type='PackActionInputs'),
+    ]
+    ```
+  </Tab>
+  <Tab title="Raw frames (RGB)">
+    Pipeline for pre-extracted frames — swap `DecordInit`/`DecordDecode` for `RawFrameDecode` and change dataset type to `RawframeDataset`:
+
+    ```python
+    train_pipeline = [
+        dict(type='SampleFrames', clip_len=32, frame_interval=2, num_clips=1),
+        dict(type='RawFrameDecode'),
+        dict(type='Resize', scale=(-1, 256)),
+        dict(type='RandomResizedCrop'),
+        dict(type='Resize', scale=(224, 224), keep_ratio=False),
+        dict(type='Flip', flip_ratio=0.5),
+        dict(type='FormatShape', input_format='NCTHW'),
+        dict(type='PackActionInputs'),
+    ]
+    ```
+  </Tab>
+  <Tab title="TSN / TSM">
+    Segment-based sampling for 2D models:
+
+    ```python
+    train_pipeline = [
+        dict(type='DecordInit'),
+        dict(type='SampleFrames', clip_len=1, frame_interval=1, num_clips=8),
+        dict(type='DecordDecode'),
+        dict(type='Resize', scale=(-1, 256)),
+        dict(type='MultiScaleCrop',
+             input_size=224,
+             scales=(1, 0.875, 0.75, 0.66),
+             random_crop=False,
+             max_wh_scale_gap=1),
+        dict(type='Resize', scale=(224, 224), keep_ratio=False),
+        dict(type='Flip', flip_ratio=0.5),
+        dict(type='FormatShape', input_format='NCHW'),
+        dict(type='PackActionInputs'),
+    ]
+    ```
+  </Tab>
+</Tabs>
+
+## Implementing a custom transform
+
+<Steps>
+  <Step title="Write the transform class">
+    Create a new file in `mmaction/datasets/transforms/`. Inherit from `mmcv.transforms.BaseTransform` and implement the `transform(results)` method. The method must accept a `dict`, modify it in-place or produce a new dict, and return it.
+
+    ```python
+    # mmaction/datasets/transforms/my_transforms.py
+    import numpy as np
+    from mmcv.transforms import BaseTransform
+    from mmaction.registry import TRANSFORMS
+
+
+    @TRANSFORMS.register_module()
+    class TemporalJitter(BaseTransform):
+        """Randomly jitter the sampled frame indices by a small offset.
+
+        This augmentation introduces temporal variation during training.
+
+        Args:
+            max_jitter (int): Maximum number of frames to shift each index.
+                Defaults to 2.
+        """
+
+        def __init__(self, max_jitter: int = 2):
+            self.max_jitter = max_jitter
+
+        def transform(self, results: dict) -> dict:
+            frame_inds = results['frame_inds']
+            total_frames = results['total_frames']
+
+            jitter = np.random.randint(
+                -self.max_jitter, self.max_jitter + 1, size=frame_inds.shape)
+            frame_inds = frame_inds + jitter
+            frame_inds = np.clip(frame_inds, 0, total_frames - 1)
+
+            results['frame_inds'] = frame_inds
+            return results
+    ```
+  </Step>
+  <Step title="Register in __init__.py">
+    Import the class in `mmaction/datasets/transforms/__init__.py` so the registry auto-discovers it:
+
+    ```python
+    from .my_transforms import TemporalJitter
+
+    __all__ = [
+        ...,
+        'TemporalJitter',
+    ]
+    ```
+  </Step>
+  <Step title="Use it in your config">
+    Insert the new transform at the appropriate position in the pipeline. `TemporalJitter` should run after `SampleFrames` (which fills `frame_inds`) and before `DecordDecode` (which reads those indices):
+
+    ```python
+    train_pipeline = [
+        dict(type='DecordInit'),
+        dict(type='SampleFrames', clip_len=32, frame_interval=2, num_clips=1),
+        dict(type='TemporalJitter', max_jitter=2),   # <-- custom transform
+        dict(type='DecordDecode'),
+        dict(type='Resize', scale=(-1, 256)),
+        dict(type='RandomResizedCrop'),
+        dict(type='Resize', scale=(224, 224), keep_ratio=False),
+        dict(type='Flip', flip_ratio=0.5),
+        dict(type='FormatShape', input_format='NCTHW'),
+        dict(type='PackActionInputs'),
+    ]
+    ```
+  </Step>
+</Steps>
+
+## Example: custom loading transform
+
+If your data lives in a non-standard format (e.g. `.pkl`, HDF5, or a cloud store), write a custom loading transform and place it at the beginning of the pipeline:
+
+```python
+@TRANSFORMS.register_module()
+class LoadVideoFromHDF5(BaseTransform):
+    """Load video frames from an HDF5 file.
+
+    Expects results['filename'] to point to an HDF5 file with a 'frames'
+    dataset of shape (T, H, W, C).
+    """
+
+    def transform(self, results: dict) -> dict:
+        import h5py
+        with h5py.File(results['filename'], 'r') as f:
+            frames = f['frames'][:]          # (T, H, W, C) numpy array
+
+        results['imgs'] = list(frames)
+        results['total_frames'] = len(frames)
+        results['img_shape'] = frames.shape[1:3]
+        return results
+```
+
+<Warning>
+Custom loading transforms must set `results['total_frames']` so that downstream sampling transforms (e.g. `SampleFrames`) know the valid index range.
+</Warning>
+
+## Augmentation strategies for video data
+
+<CardGroup cols={2}>
+  <Card title="Temporal augmentation" icon="clock">
+    Use `SampleFrames` with random start offsets, or write a custom jitter transform as shown above. For slower models, try `num_clips > 1` during testing and average predictions across clips.
+  </Card>
+  <Card title="Spatial augmentation" icon="crop">
+    `RandomResizedCrop` with `Flip` is standard for training. For testing, use `CenterCrop` for a single crop or `TenCrop` / `ThreeCrop` for multi-crop evaluation.
+  </Card>
+  <Card title="Photometric augmentation" icon="sun">
+    `ColorJitter`, `GrayScale`, and similar transforms are available from `mmcv`. Insert them after decoding and before format conversion.
+  </Card>
+  <Card title="Batch-level augmentation" icon="layer-group">
+    MixUp and CutMix run over batches on GPU. Configure them in `data_preprocessor` rather than in the pipeline, since the pipeline operates on individual samples.
+  </Card>
+</CardGroup>

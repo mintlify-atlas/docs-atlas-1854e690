@@ -1,0 +1,199 @@
+---
+title: "Get started with MMAction2 quickly"
+description: "Run your first video action recognition inference and training job with MMAction2 in under 10 minutes using pre-trained models and sample configs."
+---
+
+This guide walks you through the core MMAction2 workflow: running inference with a pre-trained model, training on a small dataset, and evaluating the result. It assumes you have [installed MMAction2 from source](/get-started/installation).
+
+## Run inference on a video
+
+MMAction2 provides two ways to run inference: a high-level CLI inferencer and a Python API using `init_recognizer` and `inference_recognizer`.
+
+<Steps>
+  <Step title="Download a demo video and a pre-trained TSN model">
+    The Kinetics-400 demo video and a TSN checkpoint are bundled with the repository. Download the config and checkpoint using MIM:
+
+    ```bash
+    mim download mmaction2 \
+        --config tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb \
+        --dest .
+    ```
+
+    The demo video is already located at `demo/demo.mp4` in the repository root.
+  </Step>
+  <Step title="Run inference">
+    <CodeGroup>
+      ```bash CLI inferencer
+      python demo/demo_inferencer.py demo/demo.mp4 \
+          --rec tsn \
+          --print-result \
+          --label-file tools/data/kinetics/label_map_k400.txt
+      ```
+
+      ```python Python API
+      from mmaction.apis import init_recognizer, inference_recognizer
+
+      config_file = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py'
+      checkpoint_file = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth'
+      video_file = 'demo/demo.mp4'
+
+      # Initialize the model from a config file and a checkpoint path.
+      # Use device='cpu' if no GPU is available.
+      model = init_recognizer(config_file, checkpoint_file, device='cuda:0')
+
+      # Run inference. Returns an ActionDataSample with pred_score populated.
+      result = inference_recognizer(model, video_file)
+      ```
+    </CodeGroup>
+
+    <Note>
+      The CLI inferencer opens a pop-up window showing the video with predictions overlaid. If you are running on a remote server without a display, use the `--print-result` flag and read the scores from stdout instead.
+    </Note>
+  </Step>
+</Steps>
+
+## Understand the inference result
+
+`inference_recognizer` returns an `ActionDataSample` object. The predicted class scores are stored in `pred_score` as a float tensor with one value per class.
+
+```python
+from operator import itemgetter
+from mmaction.apis import init_recognizer, inference_recognizer
+
+config_file = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py'
+checkpoint_file = 'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth'
+label_file = 'tools/data/kinetics/label_map_k400.txt'
+video_file = 'demo/demo.mp4'
+
+model = init_recognizer(config_file, checkpoint_file, device='cuda:0')
+result = inference_recognizer(model, video_file)
+
+# result.pred_score is a 1-D tensor of length num_classes
+pred_scores = result.pred_score.tolist()
+
+# Sort by score descending and print the top-5 labels
+score_tuples = tuple(zip(range(len(pred_scores)), pred_scores))
+score_sorted = sorted(score_tuples, key=itemgetter(1), reverse=True)
+top5 = score_sorted[:5]
+
+labels = [x.strip() for x in open(label_file).readlines()]
+for label_idx, score in top5:
+    print(f'{labels[label_idx]}: {score:.4f}')
+```
+
+<Tip>
+  The `pred_score` tensor has one entry per class in the label map. The predicted class label (as an index) is `result.pred_score.argmax().item()`. Use `result.pred_label` if it is populated by the pipeline.
+</Tip>
+
+## Train on a sample dataset
+
+The following steps train TSN on a tiny subset of Kinetics-400 to demonstrate the full training workflow.
+
+<Steps>
+  <Step title="Download and extract the tiny Kinetics dataset">
+    ```bash
+    wget https://download.openmmlab.com/mmaction/kinetics400_tiny.zip
+    mkdir -p data/
+    unzip kinetics400_tiny.zip -d data/
+    ```
+
+    The extracted directory contains train and val video folders and two annotation files in MMAction2's standard `video_path label` format.
+  </Step>
+  <Step title="Modify the config for the tiny dataset">
+    Open `configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py` and append the following lines. These override the dataset paths, training schedule, and model head to match the tiny dataset.
+
+    ```python
+    # Point to the tiny dataset
+    data_root = 'data/kinetics400_tiny/train'
+    data_root_val = 'data/kinetics400_tiny/val'
+    ann_file_train = 'data/kinetics400_tiny/kinetics_tiny_train_video.txt'
+    ann_file_val = 'data/kinetics400_tiny/kinetics_tiny_val_video.txt'
+
+    # Reduce batch size and training length for the small dataset
+    train_dataloader = dict(batch_size=4)
+    default_hooks = dict(
+        checkpoint=dict(type='CheckpointHook', interval=1, max_keep_ckpts=1))
+    train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=10, val_interval=1)
+    param_scheduler = [
+        dict(
+            type='MultiStepLR',
+            begin=0,
+            end=10,
+            by_epoch=True,
+            milestones=[4, 8],
+            gamma=0.1)
+    ]
+
+    # Adjust class count and load Kinetics-400 pre-trained weights
+    model = dict(cls_head=dict(num_classes=2))
+    load_from = 'https://download.openmmlab.com/mmaction/v1.0/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth'
+    ```
+
+    <Note>
+      MMAction2 uses MMEngine's config inheritance system. Values appended at the bottom of a config file override keys defined in base configs, so you do not need to edit the base files directly.
+    </Note>
+  </Step>
+  <Step title="Start training">
+    ```bash
+    python tools/train.py \
+        configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py
+    ```
+
+    MMAction2 automatically selects the best available device. With a GPU available, single-GPU training starts immediately. You will see per-epoch loss and accuracy in the terminal:
+
+    ```
+    Epoch(train)  [1][8/8]  lr: 1.5625e-04  loss: 0.7267  top1_acc: 0.0000  top5_acc: 1.0000
+    Epoch(train)  [2][8/8]  lr: 1.5625e-04  loss: 0.7130  top1_acc: 0.0000  top5_acc: 1.0000
+    ```
+
+    Checkpoints are saved to `work_dirs/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb/`. The best checkpoint is saved as `best_acc/top1_epoch_N.pth`.
+  </Step>
+</Steps>
+
+## Evaluate a trained model
+
+After training, run the test script to evaluate your best checkpoint on the validation set.
+
+```bash
+python tools/test.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    work_dirs/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb/best_acc/top1_epoch_6.pth
+```
+
+The test script reports top-1 and top-5 accuracy on the validation set:
+
+```
+Epoch(test) [10/10]  acc/top1: 1.0000  acc/top5: 1.0000  acc/mean1: 0.9000
+```
+
+<Tip>
+  Test pipelines use more augmentation views than validation pipelines, so test accuracy is typically higher than the validation accuracy logged during training. For multi-GPU testing and cluster evaluation, see the [Training and Testing guide](/user-guides/train-test).
+</Tip>
+
+## Browse the dataset (optional)
+
+Before training, you can visualize the data transforms applied by your config to catch issues early:
+
+```bash
+python tools/visualizations/browse_dataset.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    browse_out --mode pipeline
+```
+
+Transformed video clips are saved to the `browse_out/` directory. You can also inspect the learning rate schedule:
+
+```bash
+python tools/visualizations/vis_scheduler.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="User guides" icon="book" href="/user-guides/config">
+    Learn the full config system, data preparation, and advanced training options.
+  </Card>
+  <Card title="Model zoo" icon="database" href="/model-zoo/action-recognition">
+    Browse all pre-trained models and their benchmark results.
+  </Card>
+</CardGroup>

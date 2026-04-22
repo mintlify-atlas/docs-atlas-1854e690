@@ -1,0 +1,281 @@
+---
+title: "Understanding MMAction2 config files"
+description: "Learn how MMAction2's hierarchical config system works, how to inherit base configs, and how to override settings for your training runs."
+---
+
+MMAction2 uses Python files as configs, combining a modular and inheritance-based design that makes it straightforward to reproduce experiments and build new ones by changing only what differs from a baseline. Every config is composed of four logical sections—model, dataset, schedule, and runtime—and can inherit from pre-built base configs under `configs/_base_/`.
+
+## Config file structure
+
+A complete config is made up of four sections. You rarely write all four from scratch: instead you inherit the base files and override only the fields relevant to your experiment.
+
+<CardGroup cols={2}>
+  <Card title="Model" icon="brain">
+    Defines the architecture: backbone, classification head, data preprocessor, and per-task `train_cfg` / `test_cfg`.
+  </Card>
+  <Card title="Dataset" icon="database">
+    Declares dataset type, annotation paths, and the three processing pipelines (train, val, test) plus their dataloaders.
+  </Card>
+  <Card title="Schedule" icon="clock">
+    Controls training duration (`train_cfg`), parameter schedulers, and the optimizer wrapper.
+  </Card>
+  <Card title="Runtime" icon="settings">
+    Sets hooks, logging, visualization backends, and the `load_from` / `resume` checkpoint fields.
+  </Card>
+</CardGroup>
+
+## The `_base_` directory
+
+Three kinds of base configs live under `configs/_base_/`:
+
+```
+configs/_base_/
+├── default_runtime.py      # hooks, logging, load_from, resume
+├── models/
+│   ├── tsn_r50.py
+│   ├── i3d_r50.py
+│   └── ...                 # one file per architecture
+└── schedules/
+    ├── sgd_100e.py
+    ├── sgd_50e.py
+    └── ...                 # optimizer + LR schedule combos
+```
+
+A primitive config that assembles all three looks like this:
+
+```python
+_base_ = [
+    '../../_base_/models/tsn_r50.py',
+    '../../_base_/schedules/sgd_100e.py',
+    '../../_base_/default_runtime.py'
+]
+```
+
+Any key you redeclare in the inheriting config overrides the value from `_base_`. Keys you omit are inherited as-is. The maximum recommended inheritance depth is three levels.
+
+## Config file naming convention
+
+Config filenames encode the most important experimental settings:
+
+```
+{algorithm info}_{module info}_{training info}_{data info}.py
+```
+
+For example:
+
+```
+tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py
+│   │                    │   │    │          │             │
+│   pretrained source    │   │    pipeline   dataset       modality
+│                        │   batch/GPU
+│                        backbone
+model type
+```
+
+## Action recognition config walkthrough
+
+The TSN config below is annotated with the role of every major field.
+
+### Model section
+
+```python
+# model settings
+model = dict(
+    type='Recognizer2D',          # top-level recognizer class
+    backbone=dict(
+        type='ResNet',
+        pretrained='torchvision://resnet50',
+        depth=50,
+        norm_eval=False),         # keep BN in train mode
+    cls_head=dict(
+        type='TSNHead',
+        num_classes=400,          # number of output classes
+        in_channels=2048,
+        spatial_type='avg',
+        consensus=dict(type='AvgConsensus', dim=1),
+        dropout_ratio=0.4,
+        init_std=0.01,
+        average_clips='prob'),    # how multi-clip scores are merged
+    data_preprocessor=dict(
+        type='ActionDataPreprocessor',
+        mean=[123.675, 116.28, 103.53],
+        std=[58.395, 57.12, 57.375],
+        format_shape='NCHW'),
+    train_cfg=None,
+    test_cfg=None)
+```
+
+### Dataset and dataloader section
+
+```python
+dataset_type = 'RawframeDataset'
+data_root = 'data/kinetics400/rawframes_train/'
+data_root_val = 'data/kinetics400/rawframes_val/'
+ann_file_train = 'data/kinetics400/kinetics400_train_list_rawframes.txt'
+ann_file_val   = 'data/kinetics400/kinetics400_val_list_rawframes.txt'
+ann_file_test  = 'data/kinetics400/kinetics400_val_list_rawframes.txt'
+
+train_dataloader = dict(
+    batch_size=32,
+    num_workers=8,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=True),
+    dataset=dict(
+        type=dataset_type,
+        ann_file=ann_file_train,
+        data_prefix=dict(img=data_root),
+        pipeline=train_pipeline))
+
+val_dataloader = dict(
+    batch_size=1,
+    num_workers=8,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type=dataset_type,
+        ann_file=ann_file_val,
+        data_prefix=dict(img=data_root_val),
+        pipeline=val_pipeline,
+        test_mode=True))
+
+test_dataloader = dict(  # mirrors val_dataloader with 25-clip test pipeline
+    batch_size=32,
+    num_workers=8,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type=dataset_type,
+        ann_file=ann_file_val,
+        data_prefix=dict(img=data_root_val),
+        pipeline=test_pipeline,
+        test_mode=True))
+
+val_evaluator  = dict(type='AccMetric')
+test_evaluator = val_evaluator
+```
+
+### Schedule section
+
+```python
+train_cfg = dict(
+    type='EpochBasedTrainLoop',
+    max_epochs=100,
+    val_begin=1,
+    val_interval=1)
+val_cfg  = dict(type='ValLoop')
+test_cfg = dict(type='TestLoop')
+
+param_scheduler = [
+    dict(
+        type='MultiStepLR',
+        begin=0,
+        end=100,
+        by_epoch=True,
+        milestones=[40, 80],
+        gamma=0.1)
+]
+
+optim_wrapper = dict(
+    type='OptimWrapper',          # switch to AmpOptimWrapper for mixed precision
+    optimizer=dict(
+        type='SGD',
+        lr=0.01,
+        momentum=0.9,
+        weight_decay=0.0001),
+    clip_grad=dict(max_norm=40, norm_type=2))
+```
+
+### Runtime section
+
+```python
+default_scope = 'mmaction'
+
+default_hooks = dict(
+    runtime_info=dict(type='RuntimeInfoHook'),
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=20, ignore_last=False),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(
+        type='CheckpointHook',
+        interval=3,
+        save_best='auto',
+        max_keep_ckpts=3),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    sync_buffers=dict(type='SyncBuffersHook'))
+
+load_from = None   # path or URL; loads weights, does NOT resume training state
+resume    = False  # set True to resume optimizer/epoch state from load_from
+```
+
+## Reading a config programmatically
+
+Use `mmengine.Config` to load and inspect a config without running training:
+
+```python
+from mmengine.config import Config
+
+cfg = Config.fromfile(
+    'configs/recognition/tsn/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py'
+)
+
+# Access fields like a dict or attribute
+print(cfg.model.cls_head.num_classes)   # 400
+print(cfg.train_dataloader.batch_size)  # 32
+
+# Modify a field in-place
+cfg.model.cls_head.num_classes = 101
+```
+
+You can also pretty-print the fully resolved (post-inheritance) config with the provided analysis tool:
+
+```bash
+python tools/analysis_tools/print_config.py /PATH/TO/CONFIG
+```
+
+## Overriding values on the command line
+
+Pass `--cfg-options` to `tools/train.py` or `tools/test.py` to override individual keys without editing the file.
+
+<Tabs>
+  <Tab title="Single key">
+    ```bash
+    python tools/train.py configs/recognition/tsn/tsn_r50.py \
+        --cfg-options model.backbone.norm_eval=False
+    ```
+  </Tab>
+  <Tab title="List item">
+    ```bash
+    # Change the first pipeline stage from SampleFrames to DenseSampleFrames
+    python tools/train.py configs/recognition/tsn/tsn_r50.py \
+        --cfg-options train_pipeline.0.type=DenseSampleFrames
+    ```
+  </Tab>
+  <Tab title="List value">
+    ```bash
+    # Override mean normalization values (quotes required for list syntax)
+    python tools/train.py configs/recognition/tsn/tsn_r50.py \
+        --cfg-options model.data_preprocessor.mean="[128,128,128]"
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+Always quote list and tuple values with double quotes and omit spaces inside them, e.g. `"[128,128,128]"`. The shell will strip the outer quotes before passing the value to the argument parser.
+</Note>
+
+## Key fields reference
+
+| Field | Purpose |
+|---|---|
+| `model` | Full architecture dict (backbone, head, preprocessor) |
+| `train_dataloader` | Batch size, workers, sampler, and dataset for training |
+| `val_dataloader` | Batch size, workers, and dataset for validation |
+| `test_dataloader` | Batch size, workers, and dataset for testing |
+| `train_cfg` | Loop type and epoch count |
+| `val_cfg` / `test_cfg` | Validation and test loop types |
+| `optim_wrapper` | Optimizer type, LR, momentum, gradient clipping |
+| `param_scheduler` | LR schedule (MultiStepLR, CosineAnnealingLR, …) |
+| `load_from` | Checkpoint path/URL for weight initialization only |
+| `resume` | Whether to resume training state from `load_from` |
+| `default_hooks` | Logging, checkpointing, and buffer sync intervals |

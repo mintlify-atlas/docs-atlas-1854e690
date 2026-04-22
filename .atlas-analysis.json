@@ -1,0 +1,88 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "MMAction2",
+  "projectDescription": "An open-source PyTorch-based toolbox for video understanding, supporting action recognition, temporal action localization, spatio-temporal action detection, skeleton-based action recognition, and video retrieval.",
+  "theme": "palm",
+  "primaryColor": "#5d6c75",
+  "lightColor": "#b5bec1",
+  "darkColor": "#2e7fc0",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "get-started/installation",
+              "get-started/quickstart"
+            ]
+          },
+          {
+            "group": "User Guides",
+            "pages": [
+              "user-guides/config",
+              "user-guides/prepare-dataset",
+              "user-guides/inference",
+              "user-guides/train-test",
+              "user-guides/finetune"
+            ]
+          },
+          {
+            "group": "Advanced Guides",
+            "pages": [
+              "advanced-guides/framework-overview",
+              "advanced-guides/customize-models",
+              "advanced-guides/customize-dataset",
+              "advanced-guides/customize-pipeline",
+              "advanced-guides/deploy"
+            ]
+          },
+          {
+            "group": "Model Zoo",
+            "pages": [
+              "model-zoo/action-recognition",
+              "model-zoo/action-localization",
+              "model-zoo/spatiotemporal-detection",
+              "model-zoo/skeleton-action"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "resources/faq",
+              "resources/changelog",
+              "resources/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Action recognition with 20+ state-of-the-art models (TSN, TSM, I3D, SlowFast, VideoMAE, etc.)",
+    "Temporal action localization (BSN, BMN, TCANet)",
+    "Spatio-temporal action detection on AVA and other benchmarks",
+    "Skeleton-based action recognition (ST-GCN, PoseC3D, STGCN++)",
+    "Video retrieval support (CLIP4Clip)",
+    "Modular design for easy customization and extension",
+    "Integration with MMEngine, MMCV, MMDetection, and MMPose",
+    "Comprehensive dataset support including Kinetics, UCF101, HMDB51, AVA"
+  ],
+  "publicApiSurface": [
+    "mmaction.apis.init_recognizer(config, checkpoint, device)",
+    "mmaction.apis.inference_recognizer(model, video, test_pipeline)",
+    "mmaction.apis.inference_skeleton(model, pose_results, img_shape, test_pipeline)",
+    "mmaction.apis.detection_inference(det_config, det_checkpoint, frame_paths, ...)",
+    "mmaction.apis.pose_inference(pose_config, pose_checkpoint, frame_paths, det_results, device)",
+    "tools/train.py — model training script",
+    "tools/test.py — model evaluation script",
+    "tools/dist_train.sh — distributed training launcher",
+    "tools/dist_test.sh — distributed evaluation launcher",
+    "mmaction.models.recognizers — video recognition model classes",
+    "mmaction.models.backbones — backbone network implementations",
+    "mmaction.datasets — dataset classes and data pipelines",
+    "mmaction.evaluation — metric and evaluation utilities"
+  ]
+}

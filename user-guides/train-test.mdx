@@ -1,0 +1,280 @@
+---
+title: "Train and evaluate models with MMAction2"
+description: "Run single-GPU and multi-GPU distributed training and evaluation using MMAction2's train.py and test.py scripts with full flag reference."
+---
+
+MMAction2 provides `tools/train.py` and `tools/test.py` as the primary entry points for training and evaluation, along with shell script wrappers for multi-GPU and Slurm cluster environments. All scripts are driven entirely by config files, so changing an experiment is a matter of editing the config or passing `--cfg-options` overrides.
+
+## Training
+
+### Single-GPU training
+
+```bash
+python tools/train.py ${CONFIG_FILE} [ARGS]
+```
+
+<Tip>
+MMAction2 prefers GPU over CPU by default. To train on CPU only, set `CUDA_VISIBLE_DEVICES=-1` before the command.
+</Tip>
+
+```bash
+# CPU-only training
+CUDA_VISIBLE_DEVICES=-1 python tools/train.py ${CONFIG_FILE}
+```
+
+#### Training script arguments
+
+| Argument | Description |
+|---|---|
+| `CONFIG_FILE` | Path to the config file |
+| `--work-dir WORK_DIR` | Directory to save logs and checkpoints. Defaults to `./work_dirs/<config_name>/` |
+| `--resume [CHECKPOINT]` | Resume training. Omit the path to auto-resume from the latest checkpoint in `work_dir` |
+| `--amp` | Enable automatic mixed-precision (AMP) training |
+| `--no-validate` | Disable checkpoint evaluation during training (not recommended) |
+| `--auto-scale-lr` | Scale the base LR proportionally to the actual total batch size |
+| `--seed SEED` | Set a fixed random seed |
+| `--diff-rank-seed` | Use different seeds across distributed ranks |
+| `--deterministic` | Enable deterministic CUDNN mode (slower, reproducible) |
+| `--cfg-options KEY=VAL` | Override individual config keys; see [config guide](/user-guides/config) |
+| `--launcher {none,pytorch,slurm,mpi}` | Job launcher. Defaults to `none` |
+
+#### Example: training TSN on Kinetics-400
+
+```bash
+python tools/train.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    --work-dir work_dirs/tsn_k400 \
+    --seed 0 \
+    --deterministic
+```
+
+#### Example: resuming a run
+
+```bash
+# Auto-resume from the latest checkpoint
+python tools/train.py configs/recognition/tsn/tsn_r50.py --resume
+
+# Resume from a specific checkpoint
+python tools/train.py configs/recognition/tsn/tsn_r50.py \
+    --resume work_dirs/tsn_r50/epoch_40.pth
+```
+
+### Multi-GPU training (single machine)
+
+Use `tools/dist_train.sh`, which wraps `torch.distributed.launch`:
+
+```bash
+bash tools/dist_train.sh ${CONFIG} ${GPUS} [PY_ARGS]
+```
+
+| Argument | Description |
+|---|---|
+| `CONFIG` | Path to the config file |
+| `GPUS` | Number of GPUs to use |
+| `[PY_ARGS]` | Any extra arguments accepted by `tools/train.py` |
+
+#### Example: 8-GPU training
+
+```bash
+bash tools/dist_train.sh \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    8
+```
+
+#### Running two jobs on one machine with different GPU sets
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 PORT=29500 bash tools/dist_train.sh ${CONFIG} 4 [PY_ARGS]
+CUDA_VISIBLE_DEVICES=4,5,6,7 PORT=29501 bash tools/dist_train.sh ${CONFIG} 4 [PY_ARGS]
+```
+
+### Multi-machine training (same network)
+
+Run `tools/dist_train.sh` on each machine, passing matching `NNODES`, `PORT`, and `MASTER_ADDR` environment variables:
+
+<Tabs>
+  <Tab title="Machine 0 (master)">
+    ```bash
+    NNODES=2 NODE_RANK=0 PORT=$MASTER_PORT MASTER_ADDR=$MASTER_ADDR \
+        bash tools/dist_train.sh $CONFIG $GPUS
+    ```
+  </Tab>
+  <Tab title="Machine 1">
+    ```bash
+    NNODES=2 NODE_RANK=1 PORT=$MASTER_PORT MASTER_ADDR=$MASTER_ADDR \
+        bash tools/dist_train.sh $CONFIG $GPUS
+    ```
+  </Tab>
+</Tabs>
+
+| Environment variable | Description |
+|---|---|
+| `NNODES` | Total number of machines. Defaults to `1` |
+| `NODE_RANK` | Index of this machine (0-based). Defaults to `0` |
+| `PORT` | Communication port, must match across all machines. Defaults to `29500` |
+| `MASTER_ADDR` | IP address of the master machine. Defaults to `127.0.0.1` |
+
+<Warning>
+Multi-machine training without high-speed networking (e.g. InfiniBand) is typically slow due to gradient synchronization overhead.
+</Warning>
+
+### Slurm training
+
+On clusters managed by Slurm, use `tools/slurm_train.sh`:
+
+```bash
+[ENV_VARS] bash tools/slurm_train.sh ${PARTITION} ${JOB_NAME} ${CONFIG} [PY_ARGS]
+```
+
+| Argument | Description |
+|---|---|
+| `PARTITION` | The Slurm partition to submit to |
+| `JOB_NAME` | A name for the submitted job |
+| `CONFIG` | Path to the config file |
+| `[PY_ARGS]` | Extra arguments for `tools/train.py` |
+
+Slurm-specific environment variables:
+
+| Variable | Description |
+|---|---|
+| `GPUS` | Total GPUs to request. Defaults to `8` |
+| `GPUS_PER_NODE` | GPUs per node. Defaults to `8` |
+| `CPUS_PER_TASK` | CPUs per GPU task. Defaults to `5` |
+| `SRUN_ARGS` | Additional `srun` arguments |
+
+Example:
+
+```bash
+GPUS=16 GPUS_PER_NODE=8 bash tools/slurm_train.sh \
+    my_partition \
+    tsn_k400 \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py
+```
+
+## Testing and evaluation
+
+### Single-GPU testing
+
+```bash
+python tools/test.py ${CONFIG_FILE} ${CHECKPOINT_FILE} [ARGS]
+```
+
+```bash
+# CPU-only testing
+CUDA_VISIBLE_DEVICES=-1 python tools/test.py ${CONFIG_FILE} ${CHECKPOINT_FILE}
+```
+
+#### Test script arguments
+
+| Argument | Description |
+|---|---|
+| `CONFIG_FILE` | Path to the config file |
+| `CHECKPOINT_FILE` | Path or URL to the checkpoint file |
+| `--work-dir WORK_DIR` | Directory to save evaluation metrics. Defaults to `./work_dirs/<config_name>/` |
+| `--dump DUMP` | Dump all model outputs to a `.pkl` file for offline evaluation |
+| `--cfg-options KEY=VAL` | Override individual config keys |
+| `--show-dir SHOW_DIR` | Directory to save result visualization images |
+| `--show` | Display prediction results in a window |
+| `--interval N` | Visualize every N-th sample. Defaults to `1` |
+| `--wait-time SEC` | Display time per window in seconds. Defaults to `2` |
+| `--launcher {none,pytorch,slurm,mpi}` | Job launcher. Defaults to `none` |
+
+#### Example: evaluate TSN on Kinetics-400
+
+```bash
+python tools/test.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    https://download.openmmlab.com/mmaction/v1.0/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb_20220906-cd10898e.pth
+```
+
+### Multi-GPU testing
+
+```bash
+bash tools/dist_test.sh ${CONFIG} ${CHECKPOINT} ${GPUS} [PY_ARGS]
+```
+
+| Argument | Description |
+|---|---|
+| `CONFIG` | Path to the config file |
+| `CHECKPOINT` | Path or URL to the checkpoint |
+| `GPUS` | Number of GPUs |
+| `[PY_ARGS]` | Extra arguments for `tools/test.py` |
+
+Example on 8 GPUs:
+
+```bash
+bash tools/dist_test.sh \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+    work_dirs/tsn_k400/best_acc_top1.pth \
+    8
+```
+
+#### Running two test jobs on one machine
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 PORT=29500 bash tools/dist_test.sh ${CONFIG} ${CHECKPOINT} 4
+CUDA_VISIBLE_DEVICES=4,5,6,7 PORT=29501 bash tools/dist_test.sh ${CONFIG} ${CHECKPOINT} 4
+```
+
+### Multi-machine testing
+
+<Tabs>
+  <Tab title="Machine 0 (master)">
+    ```bash
+    NNODES=2 NODE_RANK=0 PORT=$MASTER_PORT MASTER_ADDR=$MASTER_ADDR \
+        bash tools/dist_test.sh $CONFIG $CHECKPOINT $GPUS
+    ```
+  </Tab>
+  <Tab title="Machine 1">
+    ```bash
+    NNODES=2 NODE_RANK=1 PORT=$MASTER_PORT MASTER_ADDR=$MASTER_ADDR \
+        bash tools/dist_test.sh $CONFIG $CHECKPOINT $GPUS
+    ```
+  </Tab>
+</Tabs>
+
+### Slurm testing
+
+```bash
+[ENV_VARS] bash tools/slurm_test.sh \
+    ${PARTITION} ${JOB_NAME} ${CONFIG} ${CHECKPOINT} [PY_ARGS]
+```
+
+The same Slurm environment variables (`GPUS`, `GPUS_PER_NODE`, `CPUS_PER_TASK`, `SRUN_ARGS`) apply.
+
+## Evaluation metrics
+
+The evaluator is configured in the config under `val_evaluator` and `test_evaluator`.
+
+| Task | Evaluator | Key metrics |
+|---|---|---|
+| Action recognition | `AccMetric` | `acc/top1`, `acc/top5` |
+| Spatio-temporal detection | `AVAMetric` | `mAP` |
+| Temporal localization | `ANetMetric` | `AR@AN` |
+
+<Note>
+The `save_best='auto'` setting in `CheckpointHook` automatically selects the primary metric from `val_evaluator` to determine the best checkpoint.
+</Note>
+
+Example evaluator configs:
+
+```python
+# Action recognition
+val_evaluator  = dict(type='AccMetric')
+test_evaluator = val_evaluator
+
+# Spatio-temporal action detection
+val_evaluator = dict(
+    type='AVAMetric',
+    ann_file=ann_file_val,
+    label_file=label_file,
+    exclude_file=exclude_file_val)
+
+# Temporal action localization
+val_evaluator = dict(
+    type='ANetMetric',
+    metric_type='AR@AN',
+    dump_config=dict(
+        out=f'{work_dir}/results.json',
+        output_format='json'))
+```

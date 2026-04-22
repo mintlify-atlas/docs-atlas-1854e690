@@ -1,0 +1,287 @@
+---
+title: "Create custom datasets and annotations for MMAction2"
+description: "Write custom dataset classes and annotation files to train MMAction2 models on your own video data using the BaseDataset interface."
+---
+
+MMAction2 provides two primary dataset classes for action recognition — `VideoDataset` for raw video files and `RawframeDataset` for pre-extracted frames — each with its own annotation format. When neither fits your data layout, you can subclass `BaseActionDataset` (or `BaseDataset`) and implement a single method, `load_data_list`, to produce a list of dicts that the pipeline can consume.
+
+## Built-in dataset class hierarchy
+
+<CardGroup cols={2}>
+  <Card title="VideoDataset" icon="film">
+    Loads `.mp4` / `.avi` files via decord. Each annotation line is `<video_path> <label>`.
+  </Card>
+  <Card title="RawframeDataset" icon="images">
+    Loads pre-extracted JPEG/PNG frames from a directory. Each annotation line is `<frame_dir> <total_frames> <label>`.
+  </Card>
+  <Card title="AVADataset" icon="person-running">
+    Spatio-temporal detection on AVA. Overrides both `load_data_list` and `get_data_info` to add bounding boxes and entity IDs.
+  </Card>
+  <Card title="PoseDataset" icon="person">
+    Skeleton-based recognition from keypoint pickle files. Used with GCN-based models (STGCN, AAGCN) and PoseC3D.
+  </Card>
+</CardGroup>
+
+The inheritance chain for standard recognition datasets is:
+
+```
+mmengine.BaseDataset
+    └── mmaction.BaseActionDataset
+            ├── VideoDataset
+            └── RawframeDataset
+```
+
+| Class | Key method | Responsibility |
+|---|---|---|
+| `VideoDataset` | `load_data_list` | Build data list from annotation file |
+| `BaseActionDataset` | `get_data_info(idx)` | Return data dict for index `idx` |
+| `BaseDataset` | `__getitem__(idx)` | Call `get_data_info`, run pipeline |
+
+## Annotation file formats
+
+### VideoDataset format
+
+Each line contains a relative video path and an integer class label, separated by whitespace:
+
+```text
+train/D32_1gwq35E.mp4 0
+train/iRuyZSKhHRg.mp4 1
+train/oXy-e_P_cAI.mp4 0
+train/34XczvTaRiI.mp4 1
+```
+
+For multi-class annotations, list all labels after the filename:
+
+```text
+train/video_001.mp4 0 3 7
+train/video_002.mp4 2
+train/video_003.mp4 1 5
+```
+
+### RawframeDataset format
+
+Each line contains the frame directory, the total frame count, and the label:
+
+```text
+some/directory-1 163 1
+some/directory-2 122 1
+some/directory-3 258 2
+```
+
+For clips from long videos (`with_offset=True`), include the start frame index between the directory and total frames:
+
+```text
+some/directory-1 12 163 3
+some/directory-2 213 122 4
+```
+
+For multi-class rawframe annotations, list all labels at the end of the line:
+
+```text
+some/directory-1 163 1 3 5
+some/directory-2 122 1 2
+```
+
+<Info>
+`RawframeDataset` sets `start_index=1` by default because raw frames are conventionally numbered from `img_00001.jpg`. `VideoDataset` uses `start_index=0` because decord counts from frame 0.
+</Info>
+
+## Writing a custom dataset class
+
+Implement `load_data_list(self)` to return a list of dicts. Each dict must contain the fields that the pipeline expects — for `VideoDataset`-style pipelines this is `filename` and `label`.
+
+```python
+# mmaction/datasets/my_dataset.py
+import os.path as osp
+from mmengine.fileio import list_from_file
+from mmaction.registry import DATASETS
+from mmaction.datasets import BaseActionDataset
+
+
+@DATASETS.register_module()
+class MyVideoDataset(BaseActionDataset):
+    """Custom dataset that loads videos from a CSV-style annotation file.
+
+    Annotation format (tab-separated):
+        relative/path/to/video.mp4<TAB><label_int>
+
+    Args:
+        ann_file (str): Path to the annotation file.
+        pipeline (list): List of transform configs.
+        data_root (str): Root directory for all video files.
+        data_prefix (dict): Prefix for the video paths.
+            Defaults to ``dict(video='')``.
+        modality (str): Data modality. Defaults to ``'RGB'``.
+        test_mode (bool): Set to True for val/test splits.
+    """
+
+    def __init__(self,
+                 ann_file,
+                 pipeline,
+                 data_root,
+                 data_prefix=dict(video=''),
+                 modality='RGB',
+                 test_mode=False,
+                 **kwargs):
+        self.modality = modality
+        super().__init__(
+            ann_file=ann_file,
+            pipeline=pipeline,
+            data_root=data_root,
+            data_prefix=data_prefix,
+            test_mode=test_mode,
+            **kwargs)
+
+    def load_data_list(self):
+        """Parse annotation file into a list of sample dicts."""
+        data_list = []
+        for line in list_from_file(self.ann_file):
+            filename, label = line.strip().split('\t')
+            label = int(label)
+            filename = osp.join(self.data_prefix['video'], filename)
+            data_list.append(dict(filename=filename, label=label))
+        return data_list
+
+    def get_data_info(self, idx: int) -> dict:
+        """Extend the base data dict with modality information."""
+        data_info = super().get_data_info(idx)
+        data_info['modality'] = self.modality
+        return data_info
+```
+
+<Steps>
+  <Step title="Write the class">
+    Create `mmaction/datasets/my_dataset.py` with the class above.
+  </Step>
+  <Step title="Register in __init__.py">
+    Add the import to `mmaction/datasets/__init__.py`:
+
+    ```python
+    from .my_dataset import MyVideoDataset
+
+    __all__ = [
+        ...,
+        'MyVideoDataset',
+    ]
+    ```
+  </Step>
+  <Step title="Use in a config">
+    Reference the dataset by its registered name:
+
+    ```python
+    dataset_type = 'MyVideoDataset'
+    data_root = 'data/my_dataset/'
+
+    train_dataloader = dict(
+        batch_size=8,
+        num_workers=4,
+        persistent_workers=True,
+        sampler=dict(type='DefaultSampler', shuffle=True),
+        dataset=dict(
+            type=dataset_type,
+            ann_file='annotations/train.tsv',
+            data_root=data_root,
+            data_prefix=dict(video='videos/'),
+            pipeline=train_pipeline,
+        )
+    )
+    ```
+  </Step>
+</Steps>
+
+## Overriding get_data_info for complex formats
+
+For datasets with richer metadata (bounding boxes, multiple clips, timestamps), override `get_data_info` to convert raw annotation fields into the keys the pipeline expects. The `AVADataset` pattern illustrates this:
+
+```python
+def load_data_list(self):
+    data_list = []
+    for record in self._parse_csv():
+        video_info = dict(
+            frame_dir=record['frame_dir'],
+            video_id=record['video_id'],
+            timestamp=int(record['timestamp']),
+            fps=self._FPS,
+            ann=dict(
+                gt_bboxes=record['bboxes'],
+                gt_labels=record['labels'],
+                entity_ids=record['entity_ids'],
+            )
+        )
+        data_list.append(video_info)
+    return data_list
+
+def get_data_info(self, idx: int) -> dict:
+    data_info = super().get_data_info(idx)
+    ann = data_info.pop('ann')
+    data_info['gt_bboxes'] = ann['gt_bboxes']
+    data_info['gt_labels'] = ann['gt_labels']
+    data_info['entity_ids'] = ann['entity_ids']
+    return data_info
+```
+
+## Customizing keypoint formats for PoseDataset
+
+`PoseDataset` supports three built-in keypoint formats: `coco` (17 keypoints), `nturgb+d`, and `openpose`. To use a custom skeleton, define the graph layout for your backbone and the joint-to-bone pairs for the pipeline.
+
+<AccordionGroup>
+  <Accordion title="Define the graph layout">
+    Add a new layout to your GCN backbone's `Graph` class. Specify the number of nodes, the inward (centripetal) connections, and the center node:
+
+    ```python
+    # Example: a simplified 10-keypoint body layout
+    self.num_node = 10
+    self.inward = [
+        (1, 0), (2, 0), (3, 1), (4, 2),
+        (5, 0), (6, 0), (7, 5), (8, 6), (9, 7),
+    ]
+    self.center = 0
+    ```
+  </Accordion>
+  <Accordion title="Define joint-to-bone pairs">
+    Add the corresponding `pairs` to your `JointToBone` transform. Include `(0, 0)` to keep the bone count equal to the node count:
+
+    ```python
+    self.pairs = (
+        (0, 0), (1, 0), (2, 0), (3, 1),
+        (4, 2), (5, 0), (6, 0), (7, 5),
+        (8, 6), (9, 7),
+    )
+    ```
+  </Accordion>
+  <Accordion title="Configure the model and pipeline">
+    Pass your layout name to both the backbone and the pipeline transforms:
+
+    ```python
+    model = dict(
+        type='RecognizerGCN',
+        backbone=dict(
+            type='STGCN',
+            graph_cfg=dict(layout='my_layout', mode='stgcn_spatial'),
+        ),
+        cls_head=dict(type='GCNHead', num_classes=60, in_channels=256),
+    )
+
+    train_pipeline = [
+        dict(type='PreNormalize2D'),
+        dict(type='GenSkeFeat', dataset='my_layout'),
+        dict(type='UniformSampleFrames', clip_len=100),
+        dict(type='PoseDecode'),
+        dict(type='FormatGCNInput', num_person=2),
+        dict(type='PackActionInputs'),
+    ]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## VideoDataset vs RawframeDataset: key differences
+
+| Property | `VideoDataset` | `RawframeDataset` |
+|---|---|---|
+| Input format | `.mp4`, `.avi` video files | Directories of JPEG/PNG frames |
+| Annotation columns | `filename label` | `frame_dir total_frames label` |
+| `start_index` default | `0` (decord counts from 0) | `1` (frames named `img_00001.jpg`) |
+| `data_prefix` key | `video` | `img` |
+| Decoding transform | `DecordInit` + `DecordDecode` | `SampleFrames` + `RawFrameDecode` |
+| Storage requirement | Low (compressed video) | High (one file per frame) |
+| Decoding speed | Slower (runtime decode) | Faster (direct file read) |

@@ -1,0 +1,245 @@
+---
+title: "Fine-tune MMAction2 models on custom data"
+description: "Fine-tune pre-trained MMAction2 models on your own video dataset by modifying configs, adjusting learning rates, and using partial weight loading."
+---
+
+Fine-tuning a pre-trained model on a new dataset is the most practical path to high performance when you have limited data or compute. MMAction2's inheritance-based config system makes this straightforward: you pick a template config, update the head for your class count, point the dataset fields at your data, reduce the learning rate and epoch count, and set `load_from` to the pre-trained checkpoint.
+
+## Overview
+
+<Steps>
+  <Step title="Choose a template config">
+    Find the config for the model and dataset closest to your target task in `configs/`. Copy it to the same folder and rename it.
+  </Step>
+  <Step title="Modify the classification head">
+    Update `num_classes` in `cls_head` to match the number of classes in your dataset.
+  </Step>
+  <Step title="Update dataset paths">
+    Point `dataset_type`, `data_root`, and the annotation file paths at your data.
+  </Step>
+  <Step title="Adjust the training schedule">
+    Lower the learning rate and reduce `max_epochs` to suit fine-tuning.
+  </Step>
+  <Step title="Set load_from">
+    Provide the pre-trained checkpoint URL or local path via `load_from`.
+  </Step>
+  <Step title="Run training">
+    Launch training with `python tools/train.py`.
+  </Step>
+</Steps>
+
+## Worked example: TSN fine-tuned on UCF-101
+
+This example starts from the Kinetics-400 TSN config and adapts it for UCF-101 (101 classes).
+
+### Step 1: choose a template config
+
+Copy the Kinetics-400 TSN config:
+
+```bash
+cp configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py \
+   configs/recognition/tsn/tsn_ucf101.py
+```
+
+### Step 2: modify the classification head
+
+Change `num_classes` from 400 to 101. All other head parameters and all backbone weights are reused from the pre-trained model.
+
+```python
+# model settings
+model = dict(
+    cls_head=dict(
+        type='TSNHead',
+        num_classes=101  # changed from 400
+    ))
+```
+
+<Note>
+Only the final prediction layer is reinitialized when `num_classes` changes. The backbone and all intermediate layers are loaded from the pre-trained checkpoint.
+</Note>
+
+### Step 3: update the dataset section
+
+```python
+dataset_type  = 'VideoDataset'
+data_root     = 'data/ucf101/videos_train/'
+data_root_val = 'data/ucf101/videos_val/'
+ann_file_train = 'data/ucf101/ucf101_train_list.txt'
+ann_file_val   = 'data/ucf101/ucf101_val_list.txt'
+
+train_dataloader = dict(
+    dataset=dict(
+        ann_file=ann_file_train,
+        data_prefix=dict(video=data_root)))
+val_dataloader = dict(
+    dataset=dict(
+        ann_file=ann_file_val,
+        data_prefix=dict(video=data_root_val)))
+test_dataloader = dict(
+    dataset=dict(
+        ann_file=ann_file_val,
+        data_prefix=dict(video=data_root_val)))
+```
+
+### Step 4: adjust the training schedule
+
+Fine-tuning requires fewer epochs and a lower learning rate than training from scratch. A good starting point is half the epochs and half the original learning rate:
+
+```python
+train_cfg = dict(
+    type='EpochBasedTrainLoop',
+    max_epochs=50,       # reduced from 100
+    val_begin=1,
+    val_interval=1)
+val_cfg  = dict(type='ValLoop')
+test_cfg = dict(type='TestLoop')
+
+param_scheduler = [
+    dict(
+        type='MultiStepLR',
+        begin=0,
+        end=50,           # matches max_epochs
+        by_epoch=True,
+        milestones=[20, 40],  # adjusted milestones
+        gamma=0.1)
+]
+
+optim_wrapper = dict(
+    optimizer=dict(
+        type='SGD',
+        lr=0.005,         # reduced from 0.01
+        momentum=0.9,
+        weight_decay=0.0001),
+    clip_grad=dict(max_norm=40, norm_type=2))
+```
+
+### Step 5: set `load_from`
+
+`load_from` initializes model weights from a checkpoint without restoring optimizer state or the epoch counter. This is distinct from `resume`, which restores the full training state.
+
+```python
+# Weights are loaded; training begins from epoch 0 with a fresh optimizer
+load_from = (
+    'https://download.openmmlab.com/mmaction/v1.0/recognition/tsn/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb'
+    '_20220906-cd10898e.pth'
+)
+```
+
+<Warning>
+Do not use `resume = True` for fine-tuning. `resume` is for continuing an interrupted training run and will restore the optimizer state and epoch count from the checkpoint, which is not what you want when starting on a new dataset.
+</Warning>
+
+## Complete fine-tuning config (inheritance approach)
+
+The most concise way to write the fine-tuning config is to inherit the Kinetics-400 config and override only the changed fields:
+
+```python
+_base_ = [
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb.py'
+]
+
+# --- Head: new class count ---
+model = dict(
+    cls_head=dict(
+        type='TSNHead',
+        num_classes=101))
+
+# --- Dataset: UCF-101 paths ---
+dataset_type  = 'VideoDataset'
+data_root     = 'data/ucf101/videos_train/'
+data_root_val = 'data/ucf101/videos_val/'
+ann_file_train = 'data/ucf101/ucf101_train_list.txt'
+ann_file_val   = 'data/ucf101/ucf101_val_list.txt'
+
+train_dataloader = dict(
+    dataset=dict(
+        ann_file=ann_file_train,
+        data_prefix=dict(video=data_root)))
+val_dataloader = dict(
+    dataset=dict(
+        ann_file=ann_file_val,
+        data_prefix=dict(video=data_root_val)))
+test_dataloader = dict(
+    dataset=dict(
+        ann_file=ann_file_val,
+        data_prefix=dict(video=data_root_val)))
+
+# --- Schedule: fewer epochs, lower LR ---
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=50,
+                 val_begin=1, val_interval=1)
+val_cfg  = dict(type='ValLoop')
+test_cfg = dict(type='TestLoop')
+
+param_scheduler = [
+    dict(type='MultiStepLR', begin=0, end=50,
+         by_epoch=True, milestones=[20, 40], gamma=0.1)
+]
+
+optim_wrapper = dict(
+    optimizer=dict(type='SGD', lr=0.005, momentum=0.9, weight_decay=0.0001),
+    clip_grad=dict(max_norm=40, norm_type=2))
+
+val_evaluator  = dict(type='AccMetric')
+test_evaluator = val_evaluator
+
+# --- Checkpoint: keep only the 3 best ---
+default_hooks = dict(checkpoint=dict(interval=3, max_keep_ckpts=3))
+
+# --- LR auto-scaling reference batch size ---
+auto_scale_lr = dict(enable=False, base_batch_size=256)
+
+# --- Pre-trained weights ---
+load_from = (
+    'https://download.openmmlab.com/mmaction/v1.0/recognition/tsn/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x3-100e_kinetics400-rgb'
+    '_20220906-cd10898e.pth'
+)
+```
+
+<Tip>
+Place the fine-tuning config in the same directory as the parent config so that the relative `_base_` path resolves correctly.
+</Tip>
+
+## Running fine-tuning
+
+```bash
+python tools/train.py configs/recognition/tsn/tsn_ucf101.py \
+    --seed 0 \
+    --deterministic
+```
+
+For multi-GPU fine-tuning:
+
+```bash
+bash tools/dist_train.sh \
+    configs/recognition/tsn/tsn_ucf101.py \
+    4
+```
+
+## Key config fields for fine-tuning
+
+| Field | Fine-tuning guidance |
+|---|---|
+| `model.cls_head.num_classes` | Set to your dataset's class count |
+| `load_from` | URL or path to pre-trained checkpoint; weight-only load |
+| `resume` | Keep as `False` for fine-tuning |
+| `optim_wrapper.optimizer.lr` | Start at 50–100% of the original LR |
+| `train_cfg.max_epochs` | 25–50% of the original epoch count is usually sufficient |
+| `param_scheduler[*].milestones` | Rescale milestones proportionally to the new `max_epochs` |
+| `auto_scale_lr` | Enable if your fine-tuning batch size differs from the reference |
+
+## Freezing the backbone
+
+To freeze backbone weights and only train the head, add `norm_eval=True` and override `backbone` parameters in the model config. For more granular control (e.g. freezing specific stages), refer to the [customize models guide](https://mmaction2.readthedocs.io/en/latest/advanced_guides/customize_models.html).
+
+```python
+model = dict(
+    backbone=dict(
+        norm_eval=True,   # freeze batch norm stats
+        frozen_stages=4), # freeze all four ResNet stages
+    cls_head=dict(
+        num_classes=101))
+```

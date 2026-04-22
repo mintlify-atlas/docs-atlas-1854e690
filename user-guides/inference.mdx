@@ -1,0 +1,290 @@
+---
+title: "Run inference with pre-trained MMAction2 models"
+description: "Use MMAction2's Python API and demo scripts to run action recognition, skeleton, and spatio-temporal detection inference on videos and images."
+---
+
+MMAction2 exposes a set of high-level Python APIs that let you load a pre-trained model and run inference on a video in just a few lines of code. The same APIs power the demo scripts in the `demo/` directory, which add visualization and output-file support on top of the core inference functions.
+
+## Python API overview
+
+<CardGroup cols={2}>
+  <Card title="init_recognizer" icon="play">
+    Builds and returns an action recognition model from a config file and optional checkpoint.
+  </Card>
+  <Card title="inference_recognizer" icon="video">
+    Runs a single video (file path or dict) through the model's test pipeline and returns an `ActionDataSample`.
+  </Card>
+  <Card title="inference_skeleton" icon="person-walking">
+    Runs skeleton-based action recognition from pose estimation results produced by `pose_inference`.
+  </Card>
+  <Card title="detection_inference / pose_inference" icon="scan">
+    Helper APIs that run a person detector and a pose estimator (from MMDet and MMPose) across a list of frame paths.
+  </Card>
+</CardGroup>
+
+## Action recognition inference
+
+### `init_recognizer`
+
+```python
+mmaction.apis.init_recognizer(
+    config: Union[str, Path, mmengine.Config],
+    checkpoint: Optional[str] = None,
+    device: Union[str, torch.device] = 'cuda:0'
+) -> nn.Module
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `config` | `str`, `Path`, or `mmengine.Config` | Path to the config file or a pre-loaded config object |
+| `checkpoint` | `str`, optional | Path or URL to the checkpoint. If `None`, no weights are loaded |
+| `device` | `str` or `torch.device` | Target device, e.g. `"cuda:0"` or `"cpu"` |
+
+Returns: the constructed `nn.Module` in eval mode.
+
+### `inference_recognizer`
+
+```python
+mmaction.apis.inference_recognizer(
+    model: nn.Module,
+    video: Union[str, dict],
+    test_pipeline: Optional[Compose] = None
+) -> ActionDataSample
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `model` | `nn.Module` | A recognizer built by `init_recognizer` |
+| `video` | `str` or `dict` | Path to an MP4/AVI file, an `.npy` audio file, or a pre-built input dict |
+| `test_pipeline` | `Compose`, optional | Custom pipeline; defaults to the pipeline defined in the model's config |
+
+Returns: an `ActionDataSample` whose `pred_score` tensor holds the per-class softmax scores.
+
+### Basic example
+
+```python
+from mmaction.apis import inference_recognizer, init_recognizer
+
+config_path = (
+    'configs/recognition/tsn/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb.py'
+)
+checkpoint_path = (
+    'https://download.openmmlab.com/mmaction/v1.0/recognition/tsn/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb/'
+    'tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb'
+    '_20220906-2692d16c.pth'
+)
+video_path = 'demo/demo.mp4'
+
+# Build the model
+model = init_recognizer(config_path, checkpoint_path, device='cuda:0')
+
+# Run inference
+result = inference_recognizer(model, video_path)
+```
+
+<Note>
+To run on CPU, pass `device="cpu"` to `init_recognizer`. If you have installed MMAction2 as a third-party package rather than from source, download the config first with `mim download mmaction2 --config tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb --dest .`
+</Note>
+
+### Interpreting `ActionDataSample` results
+
+The returned object has two relevant attributes:
+
+| Attribute | Description |
+|---|---|
+| `result.pred_score` | `torch.Tensor` of shape `[num_classes]` — softmax probability for each class |
+| `result.pred_label` | `torch.Tensor` with the predicted class index (highest score) |
+
+To extract the top-5 predictions:
+
+```python
+from operator import itemgetter
+
+pred_scores = result.pred_score.tolist()
+score_tuples = list(enumerate(pred_scores))
+top5 = sorted(score_tuples, key=itemgetter(1), reverse=True)[:5]
+
+# Load label file (one label per line)
+labels = [line.strip() for line in open('tools/data/kinetics/label_map_k400.txt')]
+
+for class_idx, score in top5:
+    print(f'{labels[class_idx]}: {score:.4f}')
+```
+
+### Batch inference
+
+`inference_recognizer` processes one video at a time. For batch inference, loop over inputs and collect results:
+
+```python
+video_paths = ['clip1.mp4', 'clip2.mp4', 'clip3.mp4']
+results = [inference_recognizer(model, p) for p in video_paths]
+
+for path, res in zip(video_paths, results):
+    pred_class = res.pred_score.argmax().item()
+    print(f'{path}: class {pred_class} (score {res.pred_score[pred_class]:.4f})')
+```
+
+## Skeleton-based inference
+
+Skeleton inference requires three steps: extract frames, detect persons, estimate poses, then classify.
+
+### `detection_inference`
+
+```python
+mmaction.apis.detection_inference(
+    det_config: Union[str, Path, mmengine.Config, nn.Module],
+    det_checkpoint: str,
+    frame_paths: List[str],
+    det_score_thr: float = 0.9,
+    det_cat_id: int = 0,
+    device: Union[str, torch.device] = 'cuda:0',
+    with_score: bool = False
+) -> Tuple[List[np.ndarray], List[DetDataSample]]
+```
+
+Requires MMDet to be installed. Returns detected bounding boxes (and optionally scores) for each frame.
+
+### `pose_inference`
+
+```python
+mmaction.apis.pose_inference(
+    pose_config: Union[str, Path, mmengine.Config, nn.Module],
+    pose_checkpoint: str,
+    frame_paths: List[str],
+    det_results: List[np.ndarray],
+    device: Union[str, torch.device] = 'cuda:0'
+) -> Tuple[List[List[Dict[str, np.ndarray]]], List[PoseDataSample]]
+```
+
+Requires MMPose to be installed. Runs top-down pose estimation using the bounding boxes from `detection_inference`.
+
+### `inference_skeleton`
+
+```python
+mmaction.apis.inference_skeleton(
+    model: nn.Module,
+    pose_results: List[dict],
+    img_shape: Tuple[int],
+    test_pipeline: Optional[Compose] = None
+) -> ActionDataSample
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `model` | `nn.Module` | A skeleton recognizer built with `init_recognizer` |
+| `pose_results` | `List[dict]` | Per-frame pose dicts from `pose_inference` |
+| `img_shape` | `Tuple[int]` | Original frame shape `(height, width)` |
+
+Returns an `ActionDataSample` with `pred_score` in the same format as the RGB recognizer.
+
+### End-to-end skeleton inference example
+
+```python
+from mmaction.apis import (
+    detection_inference,
+    inference_skeleton,
+    init_recognizer,
+    pose_inference,
+)
+from mmaction.utils import frame_extract
+import tempfile
+
+video = 'demo/demo.mp4'
+skeleton_config = (
+    'configs/skeleton/posec3d/'
+    'slowonly_r50_8xb16-u48-240e_ntu60-xsub-keypoint.py'
+)
+skeleton_checkpoint = (
+    'https://download.openmmlab.com/mmaction/skeleton/posec3d/'
+    'slowonly_r50_u48_240e_ntu60_xsub_keypoint/'
+    'slowonly_r50_u48_240e_ntu60_xsub_keypoint-f3adabf1.pth'
+)
+det_config     = 'demo/demo_configs/faster-rcnn_r50_fpn_2x_coco_infer.py'
+det_checkpoint = (
+    'http://download.openmmlab.com/mmdetection/v2.0/faster_rcnn/'
+    'faster_rcnn_r50_fpn_2x_coco/'
+    'faster_rcnn_r50_fpn_2x_coco_bbox_mAP-0.384_20200504_210434-a5d8aa15.pth'
+)
+pose_config     = 'demo/demo_configs/td-hm_hrnet-w32_8xb64-210e_coco-256x192_infer.py'
+pose_checkpoint = (
+    'https://download.openmmlab.com/mmpose/top_down/hrnet/'
+    'hrnet_w32_coco_256x192-c78dce93_20200708.pth'
+)
+
+# 1. Extract frames to a temp directory
+with tempfile.TemporaryDirectory() as tmp_dir:
+    frame_paths, original_frames = frame_extract(video, tmp_dir)
+
+    # 2. Detect persons in each frame
+    det_results, _ = detection_inference(
+        det_config, det_checkpoint, frame_paths, device='cuda:0')
+
+    # 3. Estimate poses for detected persons
+    pose_results, _ = pose_inference(
+        pose_config, pose_checkpoint, frame_paths, det_results, device='cuda:0')
+
+    # 4. Classify the skeleton sequence
+    model = init_recognizer(skeleton_config, skeleton_checkpoint, device='cuda:0')
+    h, w  = original_frames[0].shape[:2]
+    result = inference_skeleton(model, pose_results, (h, w))
+
+print('Predicted class index:', result.pred_score.argmax().item())
+```
+
+## Demo scripts
+
+The `demo/` directory contains ready-to-run scripts that wrap the APIs above and add visualization:
+
+| Script | Purpose |
+|---|---|
+| `demo/demo.py` | RGB action recognition with optional video output |
+| `demo/demo_skeleton.py` | Full skeleton pipeline (detection → pose → action) |
+| `demo/demo_spatiotemporal_det.py` | Spatio-temporal action detection |
+| `demo/demo_audio.py` | Audio-based action recognition |
+| `demo/long_video_demo.py` | Sliding-window inference on long videos |
+| `demo/webcam_demo.py` | Real-time recognition from a webcam |
+
+### Running the RGB demo
+
+```bash
+python demo/demo.py \
+    ${CONFIG_FILE} \
+    ${CHECKPOINT_FILE} \
+    ${VIDEO_FILE} \
+    ${LABEL_FILE} \
+    [--device ${DEVICE}] \
+    [--out-filename ${OUT_FILE}] \
+    [--target-resolution ${W} ${H}]
+```
+
+Example:
+
+```bash
+python demo/demo.py \
+    configs/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb.py \
+    https://download.openmmlab.com/mmaction/v1.0/recognition/tsn/tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb/tsn_imagenet-pretrained-r50_8xb32-1x1x8-100e_kinetics400-rgb_20220906-2692d16c.pth \
+    demo/demo.mp4 \
+    tools/data/kinetics/label_map_k400.txt \
+    --device cuda:0 \
+    --out-filename demo_out.mp4
+```
+
+### Running the skeleton demo
+
+```bash
+python demo/demo_skeleton.py \
+    ${VIDEO_FILE} \
+    ${OUT_FILENAME} \
+    [--config ${SKELETON_CONFIG}] \
+    [--checkpoint ${SKELETON_CHECKPOINT}] \
+    [--det-config ${DET_CONFIG}] \
+    [--det-checkpoint ${DET_CHECKPOINT}] \
+    [--det-score-thr 0.9] \
+    [--device cuda:0]
+```
+
+<Warning>
+`demo_skeleton.py` requires both MMDet and MMPose to be installed. Install them with `pip install mmdet mmpose` before running.
+</Warning>

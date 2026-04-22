@@ -1,0 +1,203 @@
+---
+title: "Contributing to MMAction2"
+description: "Learn how to contribute code, documentation, and bug reports to MMAction2 following OpenMMLab's development guidelines and pull request process."
+---
+
+MMAction2 welcomes all kinds of contributions from the community. Whether you are fixing a typo, adding a new model, or improving documentation, your work helps everyone who builds on the toolbox.
+
+<CardGroup cols={2}>
+  <Card title="Bug fixes" icon="bug">
+    Fix typos, incorrect documentation, or broken code paths.
+  </Card>
+  <Card title="New models" icon="brain">
+    Implement a paper's method as a new backbone, head, or full recognizer.
+  </Card>
+  <Card title="Documentation" icon="book">
+    Add tutorials, translate existing docs, or improve existing explanations.
+  </Card>
+  <Card title="New projects" icon="folder-open">
+    Add a self-contained project to the `projects/` directory with fewer restrictions than the main codebase.
+  </Card>
+</CardGroup>
+
+<Note>
+  If you are the author of a paper and want to include your method in MMAction2, contact the maintainers directly. Upstream paper contributions are especially welcome.
+</Note>
+
+## Development setup
+
+<Steps>
+  <Step title="Fork and clone the repository">
+    Fork [open-mmlab/mmaction2](https://github.com/open-mmlab/mmaction2) on GitHub, then clone your fork locally:
+
+    ```bash
+    git clone https://github.com/<your-username>/mmaction2.git
+    cd mmaction2
+    ```
+  </Step>
+
+  <Step title="Create a conda environment and install dependencies">
+    ```bash
+    conda create --name openmmlab python=3.8 -y
+    conda activate openmmlab
+    pip install -U openmim
+    mim install mmengine
+    mim install mmcv
+    mim install mmdet   # optional
+    mim install mmpose  # optional
+    ```
+  </Step>
+
+  <Step title="Install MMAction2 in editable mode">
+    Installing with `-e` means your local changes take effect immediately without reinstalling:
+
+    ```bash
+    pip install -v -e .
+    ```
+  </Step>
+
+  <Step title="Install and activate pre-commit hooks">
+    Pre-commit runs linters and formatters automatically before every commit:
+
+    ```bash
+    pip install -U pre-commit
+    pre-commit install
+    ```
+
+    From this point on, every `git commit` will check and auto-fix code style issues before the commit is recorded.
+  </Step>
+
+  <Step title="Create a new branch">
+    Never work directly on `main`. Use a descriptive branch name:
+
+    ```bash
+    git checkout -b feature/add-my-model
+    # or
+    git checkout -b fix/tsm-flip-config
+    ```
+  </Step>
+</Steps>
+
+## Code style
+
+### Python
+
+MMAction2 follows [PEP 8](https://www.python.org/dev/peps/pep-0008/). The pre-commit hooks enforce these standards automatically, but you can also run them manually:
+
+| Tool | Purpose |
+|------|---------|
+| `flake8` | Linting — catches style violations and undefined names |
+| `yapf` | Formatting — formats code to a consistent style |
+| `isort` | Import sorting — orders imports alphabetically by group |
+| `codespell` | Spell checking — catches common misspellings in code and comments |
+| `docformatter` | Docstring formatting — enforces consistent docstring style |
+| `mdformat` | Markdown formatting — enforces consistent style in `.md` files |
+
+Style configuration for `yapf` and `isort` lives in [`setup.cfg`](https://github.com/open-mmlab/mmaction2/blob/main/setup.cfg). Pre-commit configuration lives in [`.pre-commit-config.yaml`](https://github.com/open-mmlab/mmaction2/blob/main/.pre-commit-config.yaml).
+
+<Tip>
+  Run `pre-commit run --all-files` at any time to check and fix all files in the repository, not just staged changes.
+</Tip>
+
+### C++ and CUDA
+
+Follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) for any C++ or CUDA extensions.
+
+## Writing tests
+
+All new features and bug fixes should include tests. MMAction2 uses `pytest`. Tests live in the `tests/` directory, mirroring the structure of the main `mmaction/` package.
+
+Run the existing tests before opening a pull request to ensure nothing is broken:
+
+```bash
+pytest tests/
+```
+
+To run a specific test file:
+
+```bash
+pytest tests/models/test_recognizers.py -v
+```
+
+<Warning>
+  Pull requests that reduce test coverage or break existing tests will not be merged until the issues are resolved.
+</Warning>
+
+## Adding a new model
+
+To add a model to the main model zoo (not a project):
+
+<Steps>
+  <Step title="Implement the model components">
+    Place new backbones in `mmaction/models/backbones/`, heads in `mmaction/models/heads/`, and register them with the MMAction2 registry using `@MODELS.register_module()`.
+  </Step>
+
+  <Step title="Write a config file">
+    Add one or more configs in the appropriate `configs/recognition/` (or `configs/detection/`, etc.) subdirectory. Follow the naming convention of existing configs.
+  </Step>
+
+  <Step title="Add a metafile">
+    Create a `metafile.yml` in the config directory listing checkpoints, their benchmark results, and the paper reference.
+  </Step>
+
+  <Step title="Write tests">
+    Add unit tests for the new model components in `tests/models/`. Test that the model can perform a forward pass with both training and testing inputs.
+  </Step>
+
+  <Step title="Add documentation">
+    Write a `README.md` in the config directory with a brief description of the method, benchmark results table, and citation.
+  </Step>
+</Steps>
+
+<Tip>
+  For experimental models or those with non-standard dependencies, consider adding them as a **project** in `projects/` instead. Projects have fewer restrictions — you can use custom dependencies, looser code style, and experimental APIs.
+</Tip>
+
+## Pull request process
+
+<Steps>
+  <Step title="Push your branch and open a PR">
+    ```bash
+    git push origin feature/add-my-model
+    ```
+
+    Open a pull request against the `main` branch. Use a clear title and fill in all sections of the PR template.
+  </Step>
+
+  <Step title="Wait for CI checks">
+    Automated CI runs linting, unit tests, and build checks. All checks must pass before a reviewer will look at your PR.
+  </Step>
+
+  <Step title="Address review feedback">
+    Maintainers may request changes. Push additional commits to the same branch — do not close and reopen the PR.
+  </Step>
+
+  <Step title="Merge">
+    Once approved, a maintainer will merge your PR. Squash merging is used to keep the commit history clean.
+  </Step>
+</Steps>
+
+<Info>
+  If you plan to make large changes — such as a significant refactor or a major new feature — open an issue to discuss the approach before writing code. This saves time for both you and the reviewers.
+</Info>
+
+## Documentation contributions
+
+Documentation source files live in `docs/en/` as Markdown files. To contribute:
+
+1. Edit or create `.md` files in `docs/en/`.
+2. Build the docs locally to check rendering (see the docs README for instructions).
+3. Submit a pull request with your changes.
+
+Translations are also welcome. Chinese documentation lives alongside English docs and follows the same structure.
+
+## Community guidelines
+
+MMAction2 is part of the OpenMMLab ecosystem. All contributors are expected to follow the [OpenMMLab Code of Conduct](https://github.com/open-mmlab/mmaction2/blob/main/CODE_OF_CONDUCT.md). Key points:
+
+- Be respectful and constructive in issue comments and PR reviews.
+- Provide reproducible examples when reporting bugs.
+- Search existing issues before opening a new one to avoid duplicates.
+- Use the [provided issue templates](https://github.com/open-mmlab/mmaction2/tree/main/.github/ISSUE_TEMPLATE) when reporting bugs or requesting features.
+
+For questions and discussion, join the community on [Discord](https://discord.com/channels/1037617289144569886/1046608014234370059) or open a [GitHub discussion](https://github.com/open-mmlab/mmaction2/discussions).
